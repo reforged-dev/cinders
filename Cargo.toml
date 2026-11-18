@@ -1,0 +1,100 @@
+[package]
+name = "cinders"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+anyhow = "1.0.104"
+blake3 = "1.8.7"
+html-escape = "0.3.1"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+libavif-sys = { version = "0.18.0", default-features = false, features = ["codec-aom"] }
+lightningcss = { version = "1.0.0-alpha.72", default-features = false, features = ["bundler"] }
+lol_html = "3.0.3"
+mimalloc = { version = "0.1.52", default-features = false }
+moxcms = "0.8.1"
+notify = "8.2.2"
+oxc = { version = "0.159", features = ["ast_visit", "codegen", "mangler", "minifier", "semantic", "transformer"] }
+rayon = "1.12.0"
+read-fonts = { version = "0.47.0", default-features = false, features = ["std"] }
+serde = { version = "1.0.229", features = ["derive"] }
+skera = "0.10.0"
+toml = "1.2.1"
+woofwoof = "1.0.2"
+
+[lints]
+workspace = true
+
+[workspace.lints.rust]
+unreachable_pub = "warn"
+unnameable_types = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+# Panics. Return errors instead of panicking.
+unwrap_used = "warn"
+expect_used = "warn"
+get_unwrap = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+unreachable = "warn"
+unwrap_in_result = "warn"
+panic_in_result_fn = "warn"
+unchecked_time_subtraction = "warn"
+
+# Silent failures.
+let_underscore_must_use = "warn"
+unused_result_ok = "warn"
+map_err_ignore = "warn"
+assertions_on_result_states = "warn"
+
+# Unsafe and memory. Every unsafe block carries a SAFETY comment and covers one operation,
+# so review stays local.
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+mem_forget = "warn"
+
+# Casts and floats. A cast that can lose bits or a sign is explicit.
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_sign_loss = "warn"
+invalid_upcast_comparisons = "warn"
+float_cmp = "warn"
+float_cmp_const = "warn"
+lossy_float_literal = "warn"
+
+rc_mutex = "warn"
+debug_assert_with_mut_call = "warn"
+iter_not_returning_iterator = "warn"
+expl_impl_clone_on_copy = "warn"
+infallible_try_from = "warn"
+dbg_macro = "warn"
+# write! appends in place. push_str(&format!(..)) allocates a String first, and collecting
+# format!(..) allocates one per item.
+format_push_string = "warn"
+format_collect = "warn"
+# A for loop reads clearer than a for_each closure with side effects.
+needless_for_each = "warn"
+
+# An outer #[allow] becomes #[expect(..., reason)], which also fails when the suppressed
+# lint stops firing.
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+
+# Tests rebuild only this crate, and the C encoders are never built unoptimized.
+[profile.dev.package."*"]
+opt-level = 3
+debug = false
+
+# The shipped binary. Any LTO makes a one-line change take a minute or more to rebuild.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

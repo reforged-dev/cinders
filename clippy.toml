@@ -1,0 +1,2 @@
+# Ambiguous abbreviations; use full names instead. ".." keeps clippy's defaults.
+disallowed-names = ["..", "acc", "cb", "ch", "cont", "cp", "ctl", "cur", "enc", "hdr", "obj"]

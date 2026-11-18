@@ -1,0 +1,10 @@
+# The Nix shell's linker finds libiconv in /nix/store, and no code calls it. Without the link,
+# the binary needs only system libraries.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-dead_strip_dylibs"]
+
+# Rust links a static musl binary as position independent, which needs every library in it
+# built that way. The static libstdc++ that the WOFF2 encoder links is not, so the Linux
+# binaries are static executables that load at a fixed address.
+[target.'cfg(target_env = "musl")']
+rustflags = ["-C", "relocation-model=static"]
