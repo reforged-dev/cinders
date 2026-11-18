@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{title}</title>
+    <meta name="description" content={description}>
+    <meta property="og:title" content={title}>
+    <meta property="og:description" content={description}>
+    <meta property="og:image" content="../images/preview.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0b0c0d" media="(prefers-color-scheme: dark)">
+    <link rel="icon" href="../images/mark.svg">
+    <link rel="stylesheet" href="../styles/site.css">
+  </head>
+  <body>
+    <main class="page">
+      <section class="copy">
+        <div class="text">
+          <a class="mark" href="/" aria-label="Tarn, home">
+            <svg viewBox="0 0 44 44" width="44" height="44" aria-hidden="true">
+              <circle cx="22" cy="22" r="22" fill="currentColor" />
+              <path class="mark-ink" d="M9 27 17.5 14.5l4.6 6.6 3.4-4.4L35 27z" />
+              <path class="mark-line" d="M12 31.5h20M16 35h12" />
+            </svg>
+          </a>
+          <slot />
+        </div>
+      </section>
+      <figure class="scene">
+        <picture>
+          <source srcset="../images/lake-dark.svg" media="(prefers-color-scheme: dark)">
+          <img
+            src="../images/lake-light.svg"
+            width="1500"
+            height="1400"
+            alt="A lake below a range of mountains, drawn in small dots. The peaks are mirrored in the water."
+            fetchpriority="high"
+          >
+        </picture>
+      </figure>
+    </main>
+  </body>
+</html>

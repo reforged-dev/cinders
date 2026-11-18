@@ -1,0 +1,21 @@
+<Layout
+  title="The cabins: Cinders example website"
+  description="The six cabins at Tarn, with how many each sleeps and what a night costs."
+>
+  <h1 class="visually-hidden">The cabins</h1>
+  <p>
+    Each cabin has a wood stove, a kitchen, and its own rowing boat. Firewood is
+    included.
+  </p>
+  <ul class="cabins">
+    {#each site.cabins as cabin}
+      <li>
+        <span class="cabin-name">{cabin.name}</span>
+        <span class="cabin-price">${cabin.price} a night</span>
+        <span class="cabin-note">{cabin.note}</span>
+        <span class="cabin-sleeps">Sleeps {cabin.sleeps}</span>
+      </li>
+    {/each}
+  </ul>
+  <p><a class="button" href="#">Book a cabin</a></p>
+</Layout>

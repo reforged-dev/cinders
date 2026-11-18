@@ -1,0 +1,219 @@
+:root {
+  color-scheme: light dark;
+  --page: #ffffff;
+  --ink: #1d2125;
+  --soft: #6b7177;
+  --line: #d9dbdd;
+  --panel: #f5f4ef;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #0b0c0d;
+    --ink: #f2f1ec;
+    --soft: #8d9296;
+    --line: #2c2f32;
+    --panel: #121314;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  min-height: 100vh;
+  padding: 2rem;
+}
+
+.copy {
+  display: flex;
+  flex-direction: column;
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 32rem;
+  font-size: 1.0625rem;
+  line-height: 1.625;
+  text-wrap: balance;
+}
+
+.text > * {
+  margin: 0;
+}
+
+h1 {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.15em;
+}
+
+.mark {
+  display: block;
+  width: 44px;
+  margin-bottom: 0.25rem;
+  color: inherit;
+}
+
+.mark svg {
+  display: block;
+}
+
+.mark-ink {
+  fill: var(--page);
+}
+
+.mark-line {
+  fill: none;
+  stroke: var(--page);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+.button {
+  display: inline-block;
+  padding: 0.6875rem 1.5rem;
+  border: 1px solid var(--line);
+  background: var(--page);
+  color: var(--ink);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.button:hover,
+.button:focus-visible {
+  border-color: var(--ink);
+}
+
+.cabins {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  border-top: 1px solid var(--line);
+  list-style: none;
+  font-size: 1rem;
+  line-height: 1.5;
+  text-wrap: wrap;
+}
+
+.cabins li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0 1rem;
+  padding: 0.625rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.cabin-name {
+  font-weight: 500;
+}
+
+.cabin-price,
+.cabin-sleeps {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.cabin-note,
+.cabin-sleeps {
+  color: var(--soft);
+}
+
+.scene {
+  flex: none;
+  aspect-ratio: 1;
+  margin: 0;
+  overflow: hidden;
+  border-radius: 1.5rem;
+  background: var(--panel);
+}
+
+.scene img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 45%;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Mobile: the stacked layout, before the text moves into its own column. */
+@media (width < 64rem) {
+  .text {
+    margin-inline: auto;
+    text-align: center;
+  }
+
+  .mark {
+    margin-inline: auto;
+  }
+
+  .cabins {
+    text-align: left;
+  }
+
+  .button {
+    padding: 1rem 2.5rem;
+    font-size: 1.125rem;
+  }
+}
+
+@media (min-width: 40rem) {
+  .page {
+    padding: 2.5rem;
+  }
+
+  .text {
+    font-size: 1.125rem;
+  }
+}
+
+@media (min-width: 64rem) {
+  .page {
+    flex-direction: row;
+    gap: 2.5rem;
+    max-width: 2560px;
+    height: min(100vh, 1320px);
+    min-height: 40rem;
+    margin: 0 auto;
+    padding: 3rem;
+  }
+
+  .copy {
+    flex: 1;
+    justify-content: flex-end;
+    min-width: 24rem;
+  }
+
+  .scene {
+    flex: 2.5;
+    aspect-ratio: auto;
+    min-width: 0;
+  }
+}

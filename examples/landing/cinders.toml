@@ -1,0 +1,39 @@
+# A small site for Tarn, a made-up mountain lake with six cabins.
+[site]
+url = "https://tarn.example"
+
+[[site.cabins]]
+name = "Heron"
+note = "Nearest the water."
+price = 120
+sleeps = 2
+
+[[site.cabins]]
+name = "Pike"
+note = "Faces the morning sun."
+price = 120
+sleeps = 2
+
+[[site.cabins]]
+name = "Alder"
+note = "Has a second bedroom."
+price = 160
+sleeps = 4
+
+[[site.cabins]]
+name = "Marten"
+note = "At the edge of the trees."
+price = 160
+sleeps = 4
+
+[[site.cabins]]
+name = "Osprey"
+note = "The largest, with a long table."
+price = 210
+sleeps = 6
+
+[[site.cabins]]
+name = "Juniper"
+note = "The quietest, up the hill."
+price = 110
+sleeps = 2
