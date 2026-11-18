@@ -4,7 +4,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use cinders::Site;
+use cinders::config::Config;
+use cinders::{Rendered, Site};
 
 /// Writes `files` into a fresh site directory under the target directory and returns it.
 pub(crate) fn site(name: &str, files: &[(&str, &str)]) -> PathBuf {
@@ -52,4 +53,25 @@ pub(crate) fn asset(site: &Site, extension: &str) -> String {
     let paths = assets(site, extension);
     assert_eq!(paths.len(), 1, "one .{extension} asset: {paths:?}");
     text(site, paths[0])
+}
+
+/// Runs the render stage alone, so a test sees the HTML before the optimizer rewrites it.
+pub(crate) fn render(root: &Path) -> anyhow::Result<Rendered> {
+    let root = root.canonicalize()?;
+    cinders::render::render(&root, &Config::load(&root)?)
+}
+
+/// The rendered HTML of the page at the output path `path`.
+pub(crate) fn rendered(root: &Path, path: &str) -> String {
+    let pages = render(root).unwrap_or_else(|e| panic!("{e:#}")).pages;
+    let page = pages.into_iter().find(|page| page.path == path);
+    page.unwrap_or_else(|| panic!("{path} is not a page")).html
+}
+
+/// The message of the error that rendering the site fails with.
+pub(crate) fn render_error(root: &Path) -> String {
+    match render(root) {
+        Ok(_) => panic!("the render should fail"),
+        Err(e) => format!("{e:#}"),
+    }
 }

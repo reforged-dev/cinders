@@ -10,7 +10,15 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 
+use crate::paths;
 use crate::store::Store;
+
+/// What the render stage hands to the optimizer.
+pub struct Rendered {
+    pub pages: Vec<Page>,
+    /// The text of each generated file, such as the sitemap, by its output path.
+    pub files: BTreeMap<String, String>,
+}
 
 /// A rendered page. Relative references in `html` resolve against the directory of `source`.
 pub struct Page {
@@ -37,6 +45,14 @@ pub struct Site {
     pub prefix: String,
     /// The site's store, which knows the entries this build used.
     pub store: Store,
+}
+
+impl Page {
+    /// The page's URL, such as `/about/` for `about/index.html`.
+    pub fn url(&self) -> String {
+        let path = self.path.strip_suffix("index.html").unwrap_or(&self.path);
+        format!("/{}", paths::percent_encode(path))
+    }
 }
 
 impl Site {
