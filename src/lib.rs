@@ -1,6 +1,7 @@
 //! Cinders builds a static site from HTML templates and assets.
 
 pub mod config;
+pub mod dev;
 mod optimize;
 pub mod paths;
 pub mod render;

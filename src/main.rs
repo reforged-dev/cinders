@@ -4,35 +4,58 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use anyhow::Result;
-use cinders::{Content, Mode};
+use cinders::{Content, Mode, dev};
 
 // musl's allocator takes one lock, which makes a parallel build slower with every thread.
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-const USAGE: &str = "usage: cinders build [DIR]";
+const USAGE: &str = "usage: cinders build [DIR]
+       cinders dev [DIR] [--optimized] [--port N] [--host]";
 
 const HELP: &str = "
   build         write the optimized site to DIR/dist/
+  dev           serve the site on http://localhost:3000 and rebuild it on each save
   DIR           the site directory, which defaults to the current one
+  --optimized   run every step of a build in dev, to see what ships
+  --port N      listen on port N, where 0 takes a free port
+  --host        listen on every network interface, to open the site from a phone
   --help        print this help
   --version     print the version";
 
 /// What a command line asks for.
 struct Args {
-    /// The site directory.
-    dir: String,
+    /// Whether the command is `dev`, where the other is `build`.
+    dev: bool,
+    /// The site directory, if the command line names one.
+    dir: Option<String>,
+    /// The mode that `dev` builds in.
+    mode: Mode,
+    port: u16,
+    /// Whether `dev` listens on every network interface.
+    network: bool,
 }
 
 impl Args {
     /// Reads the arguments that follow the program's name, or `None` if they are not a
     /// command.
     fn parse(mut args: impl Iterator<Item = String>) -> Option<Args> {
-        if args.next()? != "build" {
+        let command = args.next()?;
+        let dev = command == "dev";
+        if !dev && command != "build" {
             return None;
         }
-        let dir = args.next().unwrap_or_else(|| ".".to_string());
-        (args.next().is_none() && !dir.starts_with('-')).then_some(Args { dir })
+        let mut parsed = Args { dev, dir: None, mode: Mode::Fast, port: 3000, network: false };
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--optimized" if dev => parsed.mode = Mode::Optimized,
+                "--host" if dev => parsed.network = true,
+                "--port" if dev => parsed.port = args.next()?.parse().ok()?,
+                _ if parsed.dir.is_none() && !arg.starts_with('-') => parsed.dir = Some(arg),
+                _ => return None,
+            }
+        }
+        Some(parsed)
     }
 }
 
@@ -53,7 +76,12 @@ fn main() -> ExitCode {
         eprintln!("{USAGE}\nrun cinders --help for what each part does");
         return ExitCode::from(2);
     };
-    match build(Path::new(&args.dir)) {
+    let dir = Path::new(args.dir.as_deref().unwrap_or("."));
+    let result = match args.dev {
+        true => dev::serve(dir, args.mode, args.port, args.network),
+        false => build(dir),
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e:#}");

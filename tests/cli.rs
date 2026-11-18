@@ -12,7 +12,11 @@ fn cinders(args: &[&str]) -> Output {
 
 #[test]
 fn rejects_arguments_it_does_not_know() {
-    let rejected: [&[&str]; 6] = [
+    let rejected: [&[&str]; 10] = [
+        &["dev", "--port"],
+        &["dev", "--port", "x"],
+        &["dev", "--port", "65536"],
+        &["dev", "a", "b"],
         &["build", "--optimized"],
         &["build", "--host"],
         &["build", "a", "b"],
@@ -24,7 +28,8 @@ fn rejects_arguments_it_does_not_know() {
         let output = cinders(args);
         assert_eq!(output.status.code(), Some(2), "{args:?}");
         let usage = String::from_utf8(output.stderr).unwrap();
-        assert!(usage.contains("usage: cinders build [DIR]"), "{usage}");
+        assert!(usage.starts_with("usage: cinders build [DIR]\n"), "{usage}");
+        assert!(usage.contains("cinders dev [DIR] [--optimized] [--port N] [--host]"), "{usage}");
         assert!(usage.contains("cinders --help"), "{usage}");
     }
 }
@@ -48,7 +53,7 @@ fn prints_help_a_version_and_a_summary_of_a_build() {
     for flag in ["--help", "-h"] {
         let help = run(&[flag]).out;
         assert!(
-            help.contains("usage: cinders build [DIR]") && help.contains("  --version  "),
+            help.contains("usage: cinders build [DIR]") && help.contains("  --host  "),
             "{help}"
         );
     }
