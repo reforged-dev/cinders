@@ -16,7 +16,7 @@ use lol_html::{
 
 use super::asset::{Asset, Kind};
 use super::reference::Target;
-use super::{Optimizer, css};
+use super::{Optimizer, css, script};
 use crate::Mode;
 use crate::paths;
 use crate::site::Page;
@@ -46,25 +46,28 @@ impl Found {
     }
 }
 
-/// Collects what `page` draws and builds. A reference that fails to resolve is skipped here
-/// and reported by the rewrite.
-pub(super) fn scan(optimizer: &Optimizer, page: &Page) -> Found {
+/// Collects what `page` draws and builds, and passes each module script to `start`. A
+/// reference that fails to resolve is skipped here and reported by the rewrite.
+pub(super) fn scan(optimizer: &Optimizer, page: &Page, start: &dyn Fn(PathBuf)) -> Found {
     let dir = page.source.parent().unwrap_or(Path::new(""));
     let depth = Rc::new(Cell::new(0));
     let found = RefCell::new(Found::default());
     let style = RefCell::new(String::new());
     let mut settings = RewriteStrSettings::new()
         .append_element_content_handler(picture_depth(Rc::clone(&depth)))
-        .append_element_content_handler(element!("img[src], link[href]", |element| {
+        .append_element_content_handler(element!("img[src], script[src], link[href]", |element| {
             let attr = if element.tag_name() == "link" { "href" } else { "src" };
             let kind = kind(optimizer, element, attr, depth.get());
             let value = element.get_attribute(attr).unwrap_or_default();
-            if matches!(kind, Kind::Css | Kind::Image)
+            if matches!(kind, Kind::Css | Kind::Module | Kind::Image)
                 && let Ok(Target::File(file, _)) = optimizer.references.resolve(dir, &value)
             {
                 let mut found = found.borrow_mut();
-                let files = if kind == Kind::Css { &mut found.styles } else { &mut found.images };
-                files.insert(file);
+                match kind {
+                    Kind::Module => start(file),
+                    Kind::Css => drop(found.styles.insert(file)),
+                    _ => drop(found.images.insert(file)),
+                }
             }
             Ok(())
         }));
@@ -98,11 +101,14 @@ pub(super) fn scan(optimizer: &Optimizer, page: &Page) -> Found {
 }
 
 /// Rewrites every reference in `page` to its output in the site, and builds its `<style>`
-/// blocks.
+/// blocks and inline scripts.
 pub(super) fn rewrite(optimizer: &Optimizer, page: &Page) -> Result<String> {
     let dir = page.source.parent().unwrap_or(Path::new(""));
     let depth = Rc::new(Cell::new(0));
     let style = RefCell::new(String::new());
+    let code = RefCell::new(String::new());
+    // How the current `<script>` is built, or `Kind::Raw` if it is not inline JavaScript.
+    let inline = Cell::new(Kind::Raw);
     let settings = RewriteStrSettings::new()
         .append_element_content_handler(picture_depth(Rc::clone(&depth)))
         .append_element_content_handler(element!(
@@ -111,6 +117,11 @@ pub(super) fn rewrite(optimizer: &Optimizer, page: &Page) -> Result<String> {
         ))
         .append_element_content_handler(element!("meta[content]", |element| {
             boxed(preview_image(optimizer, dir, element))
+        }))
+        .append_element_content_handler(element!("script", |element| {
+            let kind = element.get_attribute("type").unwrap_or_default().to_ascii_lowercase();
+            inline.set(if element.has_attribute("src") { Kind::Raw } else { script_kind(&kind) });
+            Ok(())
         }))
         .append_element_content_handler(text!("style", |text| {
             style.borrow_mut().push_str(text.as_str());
@@ -122,6 +133,19 @@ pub(super) fn rewrite(optimizer: &Optimizer, page: &Page) -> Result<String> {
             // A `</style` inside a CSS string would end the element early.
             text.replace(&boxed(css)?.replace("</style", "<\\/style"), ContentType::Html);
             Ok(())
+        }))
+        .append_element_content_handler(text!("script", |text| {
+            if inline.get() == Kind::Raw {
+                return Ok(());
+            }
+            code.borrow_mut().push_str(text.as_str());
+            if !text.last_in_text_node() {
+                text.remove();
+                return Ok(());
+            }
+            let js = script::minify(&code.take(), inline.get(), optimizer.mode).context("<script>");
+            text.replace(&boxed(js)?, ContentType::Html);
+            Ok(())
         }));
     lol_html::rewrite_str(&page.html, settings).map_err(|e| anyhow!("{e}"))
 }
@@ -132,16 +156,28 @@ fn kind(optimizer: &Optimizer, element: &Element, attr: &str, depth: u32) -> Kin
     let get = |name| element.get_attribute(name).unwrap_or_default().to_ascii_lowercase();
     match (element.tag_name().as_str(), attr) {
         ("link", "href") => match get("rel").as_str() {
+            "modulepreload" => Kind::Module,
             "preload" if get("as") == "style" => Kind::Css,
             "preload" if get("as") == "font" => Kind::Font,
             rel if rel.split_whitespace().any(|rel| rel == "stylesheet") => Kind::Css,
             _ => Kind::Raw,
         },
+        ("script", "src") => script_kind(&get("type")),
         // A `<picture>` or a `srcset` the author wrote is a hand-tuned encode, and stays.
         ("img", "src") if depth == 0 && !element.has_attribute("srcset") => match optimizer.mode {
             Mode::Optimized => Kind::Image,
             Mode::Fast => Kind::Raw,
         },
+        _ => Kind::Raw,
+    }
+}
+
+/// How a `<script>` of the type `kind` is built. One that is not JavaScript, such as JSON,
+/// stays as written.
+fn script_kind(kind: &str) -> Kind {
+    match kind {
+        "module" => Kind::Module,
+        "" | "text/javascript" => Kind::Classic,
         _ => Kind::Raw,
     }
 }

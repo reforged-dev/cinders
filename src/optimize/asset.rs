@@ -10,7 +10,7 @@ use std::time::Instant;
 use anyhow::{Result, anyhow, bail};
 
 use super::image::Encoded;
-use super::{Optimizer, css, font, image};
+use super::{Optimizer, css, font, image, script};
 use crate::Mode;
 use crate::config::Config;
 use crate::paths;
@@ -24,6 +24,10 @@ pub(super) enum Kind {
     Raw,
     /// A stylesheet, bundled with its imports.
     Css,
+    /// A module script, joined with the modules it imports.
+    Module,
+    /// A classic script, minified alone.
+    Classic,
     /// An `<img>` source, encoded to AVIF if it is a PNG or JPEG.
     Image,
     /// A file that CSS or a font preload names, subset to WOFF2 if it is a TTF or OTF font.
@@ -73,8 +77,11 @@ impl Optimizer<'_> {
         let key = (file.to_path_buf(), kind);
         let slot = Arc::clone(super::lock(&self.assets.slots).entry(key).or_default());
         let process = || {
-            let asset = self.process(file, kind);
-            asset.map_err(|e| format!("{}: {e:#}", paths::name(self.root, file)))
+            self.process(file, kind).map_err(|e| match kind {
+                // A module's error names the module and the line of the problem itself.
+                Kind::Module => format!("{e:#}"),
+                _ => format!("{}: {e:#}", paths::name(self.root, file)),
+            })
         };
         slot.get_or_init(process).clone().map_err(|e| anyhow!(e))
     }
@@ -85,6 +92,13 @@ impl Optimizer<'_> {
         let (extension, content) = match kind {
             Kind::Raw => (paths::extension(file), Content::File(file.to_path_buf())),
             Kind::Css => ("css".to_string(), Content::Bytes(css::file(self, file)?.into_bytes())),
+            Kind::Module => {
+                ("js".to_string(), Content::Bytes(script::join(self.root, file, self.mode)?))
+            }
+            Kind::Classic => {
+                let code = script::minify(&fs::read_to_string(file)?, kind, self.mode)?;
+                ("js".to_string(), Content::Bytes(code.into_bytes()))
+            }
             Kind::Font => ("woff2".to_string(), Content::Bytes(assets.subset(file)?)),
             Kind::Image => {
                 let image = assets.encode(file)?;
@@ -190,7 +204,7 @@ impl<'a> Assets<'a> {
         {
             bail!("{} and {from} both write {path}", other.from);
         }
-        // In a fast build, a plain link to a stylesheet must not replace its bundle.
+        // In a fast build, a plain link to a stylesheet or a script must not replace its bundle.
         if matches!(content, Content::File(_)) && files.contains_key(&path) {
             return Ok(());
         }

@@ -33,6 +33,7 @@ fn build_ships_pages_and_assets() {
     assert!(home.contains("<pre>  kept\n    as written  </pre>"), "{home}");
     assert!(home.contains("<a href=/about/>about</a>, or <a href=/search/>"), "{home}");
     assert!(home.contains(r#"{ "@type": "WebSite" }"#), "other script types stay: {home}");
+    assert!(home.contains("<script>var visits=1;"), "inline scripts are minified: {home}");
     assert!(home.contains("<style>.hero{background:url(/assets/mark-"), "{home}");
     assert!(home.contains(r#"style="background-image: url(/assets/mark-"#), "{home}");
     assert!(home.contains(".woff2 as=font type=font/woff2 crossorigin>"), "{home}");
@@ -41,7 +42,8 @@ fn build_ships_pages_and_assets() {
     let head = "<!doctype html><html lang=en><meta charset=utf-8><title>Notes</title>\
                 <link rel=stylesheet href=/assets/site-";
     assert!(notes.starts_with(head), "{notes}");
-    let hoisted = ".css><style>.note{border-left:4px solid}</style><script";
+    let hoisted = ".css><style>.note{border-left:4px solid}</style>\
+                   <script type=module src=/assets/app-";
     assert!(notes.contains(hoisted), "a component's style hoists once: {notes}");
     assert_eq!(notes.matches("<script").count(), 1, "and so does its script: {notes}");
     let mark = "<aside class=\"note note-tip\"><img src=/assets/mark-y0yc32kQ.svg alt>";
@@ -72,7 +74,7 @@ fn build_encodes_images() {
 }
 
 #[test]
-fn build_bundles_styles() {
+fn build_bundles_scripts_and_styles() {
     let site = build(&fixture());
     let css = asset(&site, "css");
     assert!(css.starts_with("body{margin:0;"), "imports are bundled and minified: {css}");
@@ -82,6 +84,17 @@ fn build_bundles_styles() {
         "{css}"
     );
     assert_eq!(assets(&site, "woff2").len(), 1);
+
+    let scripts = assets(&site, "js");
+    assert_eq!(scripts.len(), 2, "one file per script, shared by the pages: {scripts:?}");
+    let app = text(&site, scripts[0]);
+    assert!(app.contains("toUpperCase") && app.contains("Hello, "), "imports are joined: {app}");
+    assert!(!app.contains("tree shaking") && !app.contains("HTMLElement"), "{app}");
+    let status = text(&site, scripts[1]);
+    assert!(
+        status.contains("var statusText=") && status.contains("function showStatus"),
+        "{status}"
+    );
 }
 
 #[test]
@@ -92,6 +105,8 @@ fn fast_build_skips_the_slow_steps() {
     assert!(home.contains("<!-- A comment"), "pages are not minified: {home}");
     assert!(home.contains(r#"<img src="/_cinders/images/shot.png" alt="A terminal">"#), "{home}");
     assert!(home.contains(r#"<img src="/_cinders/images/mark.svg" alt="Mark">"#), "{home}");
+    assert!(home.contains(r#"src="/_cinders/scripts/app.js""#), "{home}");
+    assert!(home.contains("var visits = 1;"), "an inline script stays as written: {home}");
     assert!(home.contains(r#"href="/_cinders/fonts/GeistMono.ttf" as="font" type="font/ttf""#));
     assert!(home.contains(r#"<a href="/about/">"#), "{home}");
     assert!(home.contains(".hero {\n  background: url(/_cinders/images/mark.svg);"), "{home}");
@@ -99,6 +114,9 @@ fn fast_build_skips_the_slow_steps() {
     let css = text(&site, "_cinders/styles/site.css");
     assert!(css.contains("margin: 0"), "imports are bundled: {css}");
     assert!(css.contains(r#"url(/_cinders/fonts/GeistMono.ttf) format("truetype")"#), "{css}");
+    let app = text(&site, "_cinders/scripts/app.js");
+    assert!(app.contains("function greet(name)"), "joined, with its types stripped: {app}");
+    assert!(app.contains("toUpperCase"), "{app}");
     assert!(!fixture().join("dist").exists(), "a build writes nothing by itself");
 }
 

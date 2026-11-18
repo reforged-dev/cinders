@@ -8,9 +8,11 @@ mod html;
 mod image;
 mod minify;
 mod reference;
+mod script;
 
+use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread;
 
@@ -94,41 +96,47 @@ impl Optimizer<'_> {
         Ok(())
     }
 
-    /// Scans `pages`, then builds what the scan found: the characters that fonts are subset
-    /// to, the stylesheets, and the images. The pass that rewrites each page's references
-    /// then finds every result ready.
+    /// Scans `pages` and builds what the scan finds: each module script as soon as a page
+    /// names it, then the characters that fonts are subset to, the stylesheets, and the
+    /// images. The pass that rewrites each page's references then finds every result ready.
     fn prepare(&self, pages: &[Page]) -> Result<()> {
-        let found = pages.par_iter().map(|page| html::scan(self, page));
-        let found = found.reduce(Found::default, Found::merge);
-        let mut chars = found.chars;
-        if self.mode == Mode::Optimized {
-            for file in &self.config.fonts.scan {
-                let text = fs::read_to_string(self.root.join(file))
-                    .with_context(|| format!("cinders.toml: [fonts] scan: {file}"))?;
-                chars.extend(text.chars());
-            }
-            // CSS draws text that no page holds: its own strings, and the other case of a
-            // letter under `text-transform`.
-            for file in &found.styles {
-                chars.extend(css::file_strings(file).chars());
-            }
-        }
-        let cased: Vec<char> =
-            chars.iter().flat_map(|c| c.to_uppercase().chain(c.to_lowercase())).collect();
-        chars.extend(cased);
-        self.assets.chars.set(chars.into_iter().collect()).unwrap_or_default();
-        // A failure is kept, and the rewrite reports it with the page that asked.
+        // A stylesheet's build waits on the thread pool, so each stylesheet and each module
+        // script runs on its own thread, where it cannot pick up a second one. A failure is
+        // kept, and the rewrite reports it with the page that asked.
         thread::scope(|threads| {
-            // A stylesheet's build waits on the thread pool, so each runs on its own thread,
-            // where it cannot pick up a second one.
-            for file in &found.styles {
-                threads.spawn(move || self.asset(file, Kind::Css));
+            let started = Mutex::new(HashSet::new());
+            let start = |file: PathBuf| {
+                if lock(&started).insert(file.clone()) {
+                    threads.spawn(move || self.asset(&file, Kind::Module));
+                }
+            };
+            let found = pages.par_iter().map(|page| html::scan(self, page, &start));
+            let found = found.reduce(Found::default, Found::merge);
+            let mut chars = found.chars;
+            if self.mode == Mode::Optimized {
+                for file in &self.config.fonts.scan {
+                    let text = fs::read_to_string(self.root.join(file))
+                        .with_context(|| format!("cinders.toml: [fonts] scan: {file}"))?;
+                    chars.extend(text.chars());
+                }
+                // CSS draws text that no page holds: its own strings, and the other case of
+                // a letter under `text-transform`.
+                for file in &found.styles {
+                    chars.extend(css::file_strings(file).chars());
+                }
+            }
+            let cased: Vec<char> =
+                chars.iter().flat_map(|c| c.to_uppercase().chain(c.to_lowercase())).collect();
+            chars.extend(cased);
+            self.assets.chars.set(chars.into_iter().collect()).unwrap_or_default();
+            for file in found.styles {
+                threads.spawn(move || self.asset(&file, Kind::Css));
             }
             found.images.par_iter().for_each(|file| {
                 self.asset(file, Kind::Image).map(drop).unwrap_or_default();
             });
-        });
-        Ok(())
+            Ok(())
+        })
     }
 
     /// The HTML that `page` ships.

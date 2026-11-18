@@ -5,19 +5,20 @@ mod common;
 
 use std::fs;
 
-use cinders::{Content, Site};
+use cinders::{Content, Mode, Site};
 use common::{asset, assets, build, build_fast, error, fixture, site, text};
 
 const SVG: &str = "<svg xmlns='http://www.w3.org/2000/svg'/>";
 
 #[test]
-fn references_in_styles_and_public() {
+fn references_in_styles_scripts_and_public() {
     let page = concat!(
         r#"<link rel="stylesheet" href="../site.css">"#,
         r#"<div style="background: url('bg.svg')"></div>"#,
         r#"<a href="/docs/">docs</a><a href="/docs">docs</a><a href="?page=2">next</a>"#,
         r#"<a href="https://example.com/x.png">out</a><a href="mailto:a@b.c">mail</a>"#,
         r#"<a href="//cdn.example/x.js">host</a>"#,
+        r#"<script type="module">const r = await fetch("/"); console.log(r)</script>"#,
         "<a href=#x>a</a> <a href=#y>b</a>",
     );
     let files = [
@@ -33,6 +34,7 @@ fn references_in_styles_and_public() {
     assert!(html.contains(r#"href="?page=2""#) && html.contains("href=#x"), "{html}");
     assert!(html.contains("href=https://example.com/x.png") && html.contains("mailto:a@b.c"));
     assert!(html.contains("href=//cdn.example/x.js>"), "{html}");
+    assert!(html.contains("await fetch"), "an inline module may use top-level await: {html}");
     assert!(html.contains("</a> <a"), "the space between inline elements stays: {html}");
     let css = asset(&site, "css");
     assert!(css.contains("@import \"https://fonts.example/a.css\""), "{css}");
@@ -141,20 +143,31 @@ fn css_strings_and_rooted_imports() {
 fn plain_links_leave_bundles_and_fonts_alone() {
     let page = concat!(
         r#"<link rel="stylesheet" href="../a.css"><a href="../a.css">source</a>"#,
+        r#"<a href="../m.js">source</a><script type="module" src="../m.js"></script>"#,
         r#"<a href="../f.ttf" download>font</a>"#,
     );
-    let files =
-        [("pages/index.html", page), ("a.css", "@import \"b.css?v=1\";"), ("b.css", "p{top:0}")];
+    let files = [
+        ("pages/index.html", page),
+        ("a.css", "@import \"b.css?v=1\";"),
+        ("b.css", "p{top:0}"),
+        ("m.js", "import { n } from './n.js';\nconsole.log(n);\n"),
+        ("n.js", "export const n = 1;\n"),
+    ];
     let root = site("plain-links", &files);
     fs::copy(fixture().join("fonts/GeistMono.ttf"), root.join("f.ttf")).unwrap();
     let fast = build_fast(&root);
     assert!(text(&fast, "_cinders/a.css").contains("top: 0"), "the bundle is served");
+    let script = text(&fast, "_cinders/m.js");
+    assert!(script.contains("const n = 1;"), "and so is the joined script: {script}");
     let built = build(&root);
     assert_eq!(assets(&built, "ttf").len(), 1, "a linked font ships whole");
     let sheets: Vec<String> = assets(&built, "css").iter().map(|path| text(&built, path)).collect();
     assert_eq!(sheets.len(), 2, "a build ships the bundle and the source: {sheets:?}");
     assert!(sheets.contains(&"p{top:0}".to_string()), "{sheets:?}");
     assert!(sheets.contains(&"@import \"b.css?v=1\";".to_string()), "{sheets:?}");
+    let scripts: Vec<String> = assets(&built, "js").iter().map(|path| text(&built, path)).collect();
+    assert_eq!(scripts.len(), 2, "and the joined script and its source: {scripts:?}");
+    assert!(scripts.contains(&"console.log(1);".to_string()), "{scripts:?}");
 }
 
 #[test]
@@ -230,6 +243,32 @@ fn svg_links_and_entity_quoted_styles() {
     let error = error(&root);
     assert!(error.contains("pages/index.html: <use xlink:href>"), "{error}");
     assert!(error.contains("`../img/icons.svg#x` does not exist"), "{error}");
+}
+
+#[test]
+fn scripts_that_cannot_import() {
+    let page = r#"<script src="../legacy.js"></script><button onclick="hello()">x</button>"#;
+    let legacy = "function hello() { alert('hi') }\nvar counter = 0;\n";
+    let root = site("classic", &[("pages/index.html", page), ("legacy.js", legacy)]);
+    let js = asset(&build(&root), "js");
+    assert!(js.contains("function hello") && js.contains("counter"), "{js}");
+
+    let page = r#"<script>import "./x.js"</script>"#;
+    let root = site("inline-import", &[("pages/index.html", page), ("pages/x.js", "")]);
+    let classic = error(&root);
+    let expected = "pages/index.html: <script>: Cannot use import statement outside a module";
+    assert!(classic.contains(expected), "{classic}");
+    let page = r#"<script type="module">import "./x.js"</script>"#;
+    fs::write(root.join("pages/index.html"), page).unwrap();
+    let module = error(&root);
+    let expected = "pages/index.html: <script>: this script cannot import or export; give it \
+                    type=\"module\" and a src";
+    assert_eq!(module, expected);
+
+    let page = r#"<script type="module" src="app.js"></script>"#;
+    let files = [("pages/index.html", page), ("pages/app.js", "import 'nope'")];
+    let package = error(&site("package-missing", &files));
+    assert!(package.contains("pages/app.js:1: `nope` is not a relative path"), "{package}");
 }
 
 #[test]
@@ -640,4 +679,14 @@ fn errors_name_the_problem() {
     let style = error(&site("e-style", &files));
     let expected = "pages/index.html: style attribute: `m.svg` does not exist";
     assert!(style.contains(expected), "{style}");
+
+    let page =
+        r#"<script type="module" src="a.ts"></script><script type="module" src="a.js"></script>"#;
+    let files = [("pages/index.html", page), ("pages/a.ts", ""), ("pages/a.js", "")];
+    let root = site("e-fast", &files);
+    assert_eq!(assets(&build(&root), "js").len(), 1, "two empty scripts ship as one file");
+    let Err(fast) = cinders::build(&root, Mode::Fast) else { panic!("the build should fail") };
+    let fast = format!("{fast:#}");
+    let expected = "both write _cinders/pages/a.js";
+    assert!(fast.contains(expected), "either script may be named first: {fast}");
 }
