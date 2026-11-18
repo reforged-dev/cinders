@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Fixture &mdash; home</title>
+    <link rel="icon" href="../images/mark.svg">
+    <link rel="preload" href="../fonts/GeistMono.ttf" as="font" type="font/ttf" crossorigin>
+    <link rel="stylesheet" href="../styles/site.css">
+    <style>
+      .hero { background: url("../images/mark.svg"); }
+    </style>
+    <script type="module" src="../scripts/app.ts"></script>
+    <script src="../scripts/status.js"></script>
+  </head>
+  <body>
+    <!-- A comment that the minifier drops. -->
+    <h1>Fixture</h1>
+    <p>
+      Read <a href="about.html">about</a>, or <a href="/search/">search</a>.
+    </p>
+    <img src="../images/shot.png" alt="A terminal">
+    <img src="../images/photo.jpg" alt="A photo" width="32" height="24">
+    <img src="../images/badge.png" alt="">
+    <img src="../images/mark.svg" alt="Mark">
+    <picture>
+      <source srcset="../images/shot.png 1x, ../images/photo.jpg 2x">
+      <img src="../images/shot.png" alt="Hand-tuned">
+    </picture>
+    <div class="hero" style="background-image: url('../images/mark.svg')"></div>
+    <pre>  kept
+    as written  </pre>
+    <script>
+      var visits = 1;
+      document.title = "Fixture " + visits;
+    </script>
+    <script type="application/ld+json">{ "@type": "WebSite" }</script>
+  </body>
+</html>

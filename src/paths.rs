@@ -12,6 +12,11 @@ pub fn name(root: &Path, file: &Path) -> String {
     file.strip_prefix(root).unwrap_or(file).to_string_lossy().into_owned()
 }
 
+/// A file's extension in lowercase, or nothing if it has none.
+pub fn extension(file: &Path) -> String {
+    file.extension().unwrap_or_default().to_string_lossy().to_ascii_lowercase()
+}
+
 /// Resolves `.` and `..` without touching the file system.
 pub fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();

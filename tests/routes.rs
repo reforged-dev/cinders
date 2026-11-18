@@ -146,19 +146,16 @@ fn a_site_with_no_pages_renders_nothing() {
 }
 
 #[test]
-fn build_renders_the_site_in_a_directory() {
-    let root = common::site("r-build", &[("pages/index.html", "home")]);
-    let rendered = cinders::build(&root.join("pages/..")).unwrap();
-    let source = root.canonicalize().unwrap().join("pages/index.html");
-    assert_eq!(rendered.pages[0].source, source, "a page's source is under the canonical root");
-    assert_eq!(rendered.pages[0].html, "home");
+fn build_reads_the_site_in_a_directory() {
+    let files = [("pages/index.html", r#"<img src="a.svg">"#), ("pages/a.svg", "<svg/>")];
+    let root = common::site("r-build", &files);
+    let site = common::build(&root.join("pages/.."));
+    let html = common::text(&site, "index.html");
+    assert!(html.starts_with("<img src=/assets/a-"), "a reference resolves in the site: {html}");
 
-    let Err(error) = cinders::build(&root.join("nope")) else { panic!("the build should fail") };
-    assert!(
-        format!("{error:#}").contains("r-build/nope"),
-        "the error names the directory: {error:#}"
-    );
+    let error = common::error(&root.join("nope"));
+    assert!(error.contains("r-build/nope"), "the error names the directory: {error}");
     let broken = common::site("r-broken", &[("cinders.toml", "feeds = [\"blog\"]\n")]);
-    let Err(error) = cinders::build(&broken) else { panic!("the build should fail") };
-    assert!(format!("{error:#}").contains("unknown field `feeds`"), "{error:#}");
+    let error = common::error(&broken);
+    assert!(error.contains("unknown field `feeds`"), "{error}");
 }

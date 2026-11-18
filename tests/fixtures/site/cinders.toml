@@ -1,0 +1,9 @@
+# A small site that exercises every build step.
+unchecked = ["/search/"]
+
+[site]
+url = "https://fixture.example"
+
+# status.js writes these characters at runtime, so they join the font subset.
+[fonts]
+scan = ["scripts/status.js"]

@@ -1,0 +1,14 @@
+@import "base.css";
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("../fonts/GeistMono.ttf") format("truetype");
+}
+
+.hero {
+  background: url("../images/mark.svg") no-repeat;
+
+  & h1 {
+    color: #ff0000;
+  }
+}

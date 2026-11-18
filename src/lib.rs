@@ -1,6 +1,7 @@
 //! Cinders builds a static site from HTML templates and assets.
 
 pub mod config;
+mod optimize;
 pub mod paths;
 pub mod render;
 mod site;
@@ -23,10 +24,10 @@ pub enum Mode {
     Fast,
 }
 
-/// Renders the site in the directory `root`. The build ends there, since the optimize stage
-/// is not written yet.
-pub fn build(root: &Path) -> Result<Rendered> {
+/// Renders and optimizes the site in the directory `root`.
+pub fn build(root: &Path, mode: Mode) -> Result<Site> {
     let root = root.canonicalize().with_context(|| root.display().to_string())?;
     let config = Config::load(&root)?;
-    render::render(&root, &config)
+    let rendered = render::render(&root, &config)?;
+    optimize::optimize(&root, &config, rendered, mode)
 }

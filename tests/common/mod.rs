@@ -5,7 +5,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use cinders::config::Config;
-use cinders::{Rendered, Site};
+use cinders::{Mode, Rendered, Site};
+
+/// The committed fixture site.
+pub(crate) fn fixture() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/site")
+}
 
 /// Writes `files` into a fresh site directory under the target directory and returns it.
 pub(crate) fn site(name: &str, files: &[(&str, &str)]) -> PathBuf {
@@ -32,6 +37,24 @@ pub(crate) fn copy_dir(from: &Path, to: &Path, skip: &str) {
         } else {
             fs::copy(entry.path(), target).unwrap();
         }
+    }
+}
+
+/// Builds the site as `cinders build` does, without writing it.
+pub(crate) fn build(root: &Path) -> Site {
+    cinders::build(root, Mode::Optimized).unwrap_or_else(|e| panic!("{e:#}"))
+}
+
+/// Builds the site as `cinders dev` does.
+pub(crate) fn build_fast(root: &Path) -> Site {
+    cinders::build(root, Mode::Fast).unwrap_or_else(|e| panic!("{e:#}"))
+}
+
+/// The message of the error that building the site fails with.
+pub(crate) fn error(root: &Path) -> String {
+    match cinders::build(root, Mode::Optimized) {
+        Ok(_) => panic!("the build should fail"),
+        Err(e) => format!("{e:#}"),
     }
 }
 
