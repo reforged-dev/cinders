@@ -72,7 +72,7 @@ impl<'a> References<'a> {
                     true => format!(": write it without `{prefix}`, which cinders adds"),
                     false => String::new(),
                 };
-                bail!("`{value}` matches no route and no file in public/{fix}");
+                bail!("`{value}` is not a route or a file in public/{fix}");
             }
             return Ok(Target::Rooted(value.to_string()));
         }
@@ -81,8 +81,8 @@ impl<'a> References<'a> {
             return Ok(Target::Rooted(format!("{url}{}", reference.suffix)));
         }
         match fs::metadata(&file) {
-            Err(_) => bail!("`{value}` names no file"),
-            Ok(meta) if meta.is_dir() => bail!("`{value}` names a directory, not a file"),
+            Err(_) => bail!("`{value}` does not exist"),
+            Ok(meta) if meta.is_dir() => bail!("`{value}` is a directory, not a file"),
             Ok(_) => {}
         }
         ensure!(file.starts_with(self.root), "`{value}` is outside the site directory");

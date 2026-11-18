@@ -5,22 +5,27 @@ mod common;
 
 use std::fs;
 
-use cinders::Content;
-use common::{assets, build, build_fast, error, fixture, site, text};
+use cinders::{Content, Site};
+use common::{asset, assets, build, build_fast, error, fixture, site, text};
 
 const SVG: &str = "<svg xmlns='http://www.w3.org/2000/svg'/>";
 
 #[test]
-fn references_in_style_attributes_and_public() {
+fn references_in_styles_and_public() {
     let page = concat!(
+        r#"<link rel="stylesheet" href="../site.css">"#,
         r#"<div style="background: url('bg.svg')"></div>"#,
         r#"<a href="/docs/">docs</a><a href="/docs">docs</a><a href="?page=2">next</a>"#,
         r#"<a href="https://example.com/x.png">out</a><a href="mailto:a@b.c">mail</a>"#,
         r#"<a href="//cdn.example/x.js">host</a>"#,
         "<a href=#x>a</a> <a href=#y>b</a>",
     );
-    let files =
-        [("pages/index.html", page), ("pages/bg.svg", SVG), ("public/docs/index.html", "docs")];
+    let files = [
+        ("pages/index.html", page),
+        ("pages/bg.svg", SVG),
+        ("site.css", "@import url(\"https://fonts.example/a.css\");\nbody { margin: 0 }\n"),
+        ("public/docs/index.html", "docs"),
+    ];
     let site = build(&site("refs", &files));
     let html = text(&site, "index.html");
     assert!(html.contains("url(/assets/bg-"), "{html}");
@@ -29,6 +34,8 @@ fn references_in_style_attributes_and_public() {
     assert!(html.contains("href=https://example.com/x.png") && html.contains("mailto:a@b.c"));
     assert!(html.contains("href=//cdn.example/x.js>"), "{html}");
     assert!(html.contains("</a> <a"), "the space between inline elements stays: {html}");
+    let css = asset(&site, "css");
+    assert!(css.contains("@import \"https://fonts.example/a.css\""), "{css}");
 }
 
 #[test]
@@ -103,6 +110,110 @@ fn character_references_in_paths() {
 }
 
 #[test]
+fn css_strings_and_rooted_imports() {
+    let data = r#"url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>')"#;
+    let css = format!("@import \"/theme.css\";\n.x {{ background: {data} }}\n");
+    let page =
+        format!(r#"<link rel="stylesheet" href="../s.css"><style>.y{{mask:{data}}}</style>"#);
+    let files = [("pages/index.html", page.as_str()), ("s.css", &css), ("public/theme.css", "")];
+    let root = site("css-strings", &files);
+    let site = build(&root);
+    let escaped = r#"url("data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\"/>")"#;
+    let css = asset(&site, "css");
+    assert!(css.contains(escaped) && css.contains(r#"@import "/theme.css""#), "{css}");
+    assert!(text(&site, "index.html").contains(escaped));
+    fs::remove_file(root.join("public/theme.css")).unwrap();
+    let error = error(&root);
+    assert!(error.contains("`/theme.css` is not a route or a file in public/"), "{error}");
+
+    let files = [("pages/index.html", r#"<style>.x{mask:url("data:,a\a b")}.z{top:0}</style>"#)];
+    let html = text(&build(&common::site("css-break", &files)), "index.html");
+    assert!(
+        html.contains(r#"url("data:,a\a b")}.z{top:0}"#),
+        "a line break, written as an escape, is written back as one: {html}"
+    );
+    let files = [("pages/index.html", r#"<style>.x::before{content:"</style\3e "}</style>x"#)];
+    let html = text(&build(&common::site("css-end", &files)), "index.html");
+    assert!(html.ends_with("</style>x") && html.matches("</style").count() == 1, "{html}");
+}
+
+#[test]
+fn plain_links_leave_bundles_and_fonts_alone() {
+    let page = concat!(
+        r#"<link rel="stylesheet" href="../a.css"><a href="../a.css">source</a>"#,
+        r#"<a href="../f.ttf" download>font</a>"#,
+    );
+    let files =
+        [("pages/index.html", page), ("a.css", "@import \"b.css?v=1\";"), ("b.css", "p{top:0}")];
+    let root = site("plain-links", &files);
+    fs::copy(fixture().join("fonts/GeistMono.ttf"), root.join("f.ttf")).unwrap();
+    let fast = build_fast(&root);
+    assert!(text(&fast, "_cinders/a.css").contains("top: 0"), "the bundle is served");
+    let built = build(&root);
+    assert_eq!(assets(&built, "ttf").len(), 1, "a linked font ships whole");
+    let sheets: Vec<String> = assets(&built, "css").iter().map(|path| text(&built, path)).collect();
+    assert_eq!(sheets.len(), 2, "a build ships the bundle and the source: {sheets:?}");
+    assert!(sheets.contains(&"p{top:0}".to_string()), "{sheets:?}");
+    assert!(sheets.contains(&"@import \"b.css?v=1\";".to_string()), "{sheets:?}");
+}
+
+#[test]
+fn image_set_strings_stay_quoted() {
+    let rule = r#".x{background-image:image-set("../img/b.svg" 1x)}"#;
+    let root = site(
+        "image-set",
+        &[
+            ("cinders.toml", r#"browsers = ["chrome 120", "safari 17", "firefox 120"]"#),
+            (
+                "pages/index.html",
+                &format!(r#"<link rel="stylesheet" href="../styles/s.css"><style>{rule}</style>"#),
+            ),
+            ("styles/s.css", &format!("{rule}.y{{background:url(\"../img/b.svg\")}}")),
+            ("img/b.svg", SVG),
+        ],
+    );
+    let site = build(&root);
+    let html = text(&site, "index.html");
+    assert!(html.contains(r#"image-set("/assets/b-"#), "{html}");
+    let css = asset(&site, "css");
+    assert!(css.contains(r#"image-set("/assets/b-"#) && css.contains("url(/assets/b-"), "{css}");
+}
+
+#[test]
+fn stylesheets_are_lowered_for_the_browsers() {
+    let page = r#"<link rel="stylesheet" href="s.css">"#;
+    let css = ".a { color: #ff0000; & b { inset: 0 } }\n";
+    let files = [("pages/index.html", page), ("pages/s.css", css)];
+    let root = site("browsers", &files);
+    let default = asset(&build(&root), "css");
+    assert_eq!(default, ".a{color:red}.a b{inset:0}", "the default browsers lack nesting");
+    fs::write(root.join("cinders.toml"), "browsers = [\"chrome 120\", \"safari 17.2.1\"]\n")
+        .unwrap();
+    assert_eq!(asset(&build(&root), "css"), ".a{color:red;& b{inset:0}}", "newer ones nest");
+    fs::write(root.join("cinders.toml"), "browsers = [\"chrome 80\"]\n").unwrap();
+    let old = asset(&build(&root), "css");
+    assert_eq!(old, ".a{color:red}.a b{top:0;bottom:0;left:0;right:0}", "an old one has no inset");
+    let fast = text(&build_fast(&root), "_cinders/pages/s.css");
+    assert_eq!(
+        fast, ".a {\n  color: red;\n}\n\n.a b {\n  inset: 0;\n}\n",
+        "only nesting is lowered"
+    );
+
+    let browsers = |value: &str| {
+        fs::write(root.join("cinders.toml"), format!("browsers = {value}\n")).unwrap();
+        error(&root)
+    };
+    let unknown = browsers(r#"["chrome 120", "netscape 4"]"#);
+    let expected = "cinders.toml: browsers: `netscape 4` is not a browser cinders knows: chrome, edge, firefox";
+    assert!(unknown.contains(expected), "{unknown}");
+    for value in ["chrome", "chrome latest", "safari 1.2.3.4", "safari 16.300"] {
+        let malformed = browsers(&format!("[\"{value}\"]"));
+        let expected = format!("`{value}` needs a version, as in `safari 16.4`");
+        assert!(malformed.contains(&expected), "{malformed}");
+    }
+}
+
+#[test]
 fn svg_links_and_entity_quoted_styles() {
     let page = concat!(
         r##"<svg><use xlink:href="../img/icons.svg#x"></use><use href="#local"></use></svg>"##,
@@ -118,7 +229,7 @@ fn svg_links_and_entity_quoted_styles() {
     fs::remove_file(root.join("img/icons.svg")).unwrap();
     let error = error(&root);
     assert!(error.contains("pages/index.html: <use xlink:href>"), "{error}");
-    assert!(error.contains("`../img/icons.svg#x` names no file"), "{error}");
+    assert!(error.contains("`../img/icons.svg#x` does not exist"), "{error}");
 }
 
 #[test]
@@ -182,6 +293,122 @@ fn each_file_ships_once_under_its_fingerprint() {
 }
 
 #[test]
+fn fonts_subset_to_the_sites_characters() {
+    let page = r#"<link rel="stylesheet" href="s.css"><p>abc</p>"#;
+    let css = r#"@font-face { font-family: f; src: url(f.ttf) format("truetype") }"#;
+    let files = [("pages/index.html", page), ("pages/s.css", css), ("pages/extra.txt", "XYZ")];
+    let root = site("fonts", &files);
+    fs::copy(fixture().join("fonts/GeistMono.ttf"), root.join("pages/f.ttf")).unwrap();
+    let small = build(&root);
+    fs::write(root.join("cinders.toml"), "[fonts]\nscan = [\"pages/extra.txt\"]\n").unwrap();
+    let large = build(&root);
+    let size = |site| len(site, assets(site, "woff2")[0]);
+    assert!(size(&small) < size(&large), "scanned characters join the subset");
+    assert!(size(&large) < 4000, "the subset holds a handful of glyphs");
+    assert_eq!(fs::read_dir(root.join(".cinders/fonts")).unwrap().count(), 2);
+    let css = asset(&large, "css");
+    assert!(css.contains(r#".woff2)format("woff2")"#), "the format hint follows: {css}");
+
+    let fast = build_fast(&root);
+    assert!(matches!(fast.files["_cinders/pages/f.ttf"], Content::File(_)), "the font is whole");
+
+    fs::write(root.join("cinders.toml"), "[fonts]\nscan = [\"missing.js\"]\n").unwrap();
+    assert!(error(&root).contains("cinders.toml: [fonts] scan: missing.js"));
+    fs::remove_file(root.join("cinders.toml")).unwrap();
+    fs::write(root.join("pages/f.ttf"), "no font").unwrap();
+    let broken = error(&root);
+    let expected = "pages/index.html: <link href>: pages/s.css: pages/f.ttf: not a TrueType or \
+                    OpenType font";
+    assert!(broken.contains(expected), "{broken}");
+}
+
+#[test]
+fn fonts_hold_the_text_that_css_creates() {
+    // The path of the subset of a site with this page body and these rules. Two sites that
+    // draw the same characters ship the same subset.
+    let subset = |name: &str, body: &str, rules: &str, imported: &str| {
+        let page = format!(r#"<link rel="stylesheet" href="s.css">{body}"#);
+        let css = format!(
+            "@import 'more.css';\n@font-face {{ font-family: f; src: url(f.ttf) }}\n{rules}"
+        );
+        let files = [
+            ("pages/index.html", page.as_str()),
+            ("pages/s.css", &css),
+            ("pages/more.css", imported),
+        ];
+        let root = site(name, &files);
+        fs::copy(fixture().join("fonts/GeistMono.ttf"), root.join("pages/f.ttf")).unwrap();
+        assets(&build(&root), "woff2")[0].to_string()
+    };
+    let cased = subset("font-cased", "<p>Abc</p>", "", "");
+    let both = subset("font-both", "<p>ABCabc</p>", "", "");
+    assert_eq!(cased, both, "`text-transform` draws the other case of a letter");
+    assert_ne!(cased, subset("font-other", "<p>Abcd</p>", "", ""));
+    let drawn = "<input placeholder=abc value=AB alt=c>";
+    assert_eq!(cased, subset("font-attributes", drawn, "", ""), "attributes draw their text");
+    let unseen = "<p>abc</p><script>var d</script><p title=e></p>";
+    assert_eq!(cased, subset("font-unseen", unseen, "", ""), "a script and a title draw none");
+
+    let drawn = subset("font-drawn", "<p>abc\u{2192}x!?</p>", "", "");
+    let rules = r#"p::before { content: "\2192 x" } /* don't */ li::marker { content: '!\?' }"#;
+    let linked = subset("font-linked", "<p>abc</p>", rules, "");
+    assert_eq!(drawn, linked, "`content` draws its strings in a linked stylesheet");
+    let imported = subset("font-imported", "<p>abc</p>", "", rules);
+    assert_eq!(drawn, imported, "and in one that it imports");
+    let style = format!("<style>{rules}</style><p>abc</p>");
+    assert_eq!(drawn, subset("font-style", &style, "", ""), "and in a `<style>` block");
+}
+
+/// The size in bytes of the built file at `path`.
+fn len(site: &Site, path: &str) -> usize {
+    site.files[path].bytes().unwrap().len()
+}
+
+#[test]
+fn images_that_are_left_alone() {
+    let page = concat!(
+        r#"<img src="a.png" srcset="a.png 2x"><picture><img src="a.png"></picture>"#,
+        r#"<video poster="a.png"></video><div style="background: url(a.png)"></div>"#,
+        r#"<img src="a.gif"><link rel="icon" href="a.png">"#,
+    );
+    // Not real images, so the build fails if anything tries to decode one.
+    let files = [("pages/index.html", page), ("pages/a.png", "fake"), ("pages/a.gif", "fake")];
+    let root = site("images-alone", &files);
+    let site = build(&root);
+    assert!(assets(&site, "avif").is_empty() && assets(&site, "png").len() == 1);
+    assert!(!root.join(".cinders").exists(), "a build that encodes nothing writes no store");
+
+    fs::write(root.join("pages/index.html"), r#"<img src="a.png">"#).unwrap();
+    let error = error(&root);
+    assert!(error.contains("pages/index.html: <img src>: pages/a.png: decoding"), "{error}");
+    let fast = build_fast(&root);
+    assert!(matches!(fast.files["_cinders/pages/a.png"], Content::File(_)), "nothing decodes it");
+}
+
+#[test]
+fn images_wider_than_the_limit_are_scaled_down() {
+    let page = r#"<img src="shot.png"><img src="badge.png"><img src="shot.png" width="10">"#;
+    let root = site("image-width", &[("pages/index.html", page)]);
+    for image in ["shot.png", "badge.png"] {
+        fs::copy(fixture().join("images").join(image), root.join("pages").join(image)).unwrap();
+    }
+    let store = || fs::read_dir(root.join(".cinders/images")).unwrap().count();
+    let limit = |max: u32| {
+        fs::write(root.join("cinders.toml"), format!("[images]\nmax_width = {max}\n")).unwrap();
+        text(&build(&root), "index.html")
+    };
+    // The screenshot is 64 by 48 and the badge 24 by 24.
+    let html = limit(40);
+    assert!(html.contains(".avif width=40 height=30><img src=/assets/badge-"), "{html}");
+    assert!(html.contains(".avif width=24 height=24><img src=/assets/shot-"), "{html}");
+    assert!(html.ends_with(".avif width=10>"), "the size an author wrote stays: {html}");
+    assert_eq!(store(), 4, "each image is an encode and its size");
+    assert!(limit(48).contains(".avif width=48 height=36><img src=/assets/badge-"));
+    assert_eq!(store(), 6, "a new limit encodes again only the image that it shrinks");
+    assert!(limit(1).contains(".avif width=1 height=1><img"), "a side keeps one pixel");
+}
+
+#[test]
 fn public_ships_every_file_but_the_systems() {
     let files = [
         ("pages/index.html", r#"<a href="/.well-known/security.txt">x</a>"#),
@@ -200,16 +427,13 @@ fn public_ships_every_file_but_the_systems() {
 
     fs::write(root.join("pages/index.html"), r#"<a href="/.DS_Store">x</a>"#).unwrap();
     let hidden = error(&root);
-    assert!(hidden.contains("`/.DS_Store` matches no route and no file in public/"), "{hidden}");
+    assert!(hidden.contains("`/.DS_Store` is not a route or a file in public/"), "{hidden}");
 
     fs::write(root.join("pages/index.html"), r#"<a href="/deep">x</a><a href="/re">y</a>"#)
         .unwrap();
     fs::write(root.join("public/reindex.html"), "no index").unwrap();
     let named = error(&root);
-    assert!(
-        named.contains("`/re` matches no route"),
-        "only index.html names its directory: {named}"
-    );
+    assert!(named.contains("`/re` is not a route"), "only index.html names its directory: {named}");
 }
 
 #[test]
@@ -236,19 +460,20 @@ fn link_preview_images_are_checked_and_written_in_full() {
     assert!(html.contains("content=https://cdn.example/x.png>"), "{html}");
     assert!(html.contains("<meta name=description content=card.png>"), "{html}");
     assert!(html.contains("<img src=/assets/card-"), "{html}");
+    assert_eq!(assets(&site, "avif").len(), 1, "the page's image is encoded, the preview's not");
     let fast = text(&build_fast(&root), "blog/index.html");
     assert!(fast.contains(r#"content="https://x.example/_cinders/components/card.png""#), "{fast}");
 
     fs::remove_file(root.join("public/social.png")).unwrap();
     let missing = error(&root);
-    let expected = "pages/blog/index.html: <meta twitter:image>: `/social.png?v=2` matches no \
-                    route and no file in public/";
+    let expected = "pages/blog/index.html: <meta twitter:image>: `/social.png?v=2` is not a route \
+                    or a file in public/";
     assert!(missing.contains(expected), "{missing}");
     fs::write(root.join("components/Head.html"), r#"<meta property="og:image" content="x.png">"#)
         .unwrap();
     let missing = error(&root);
     assert!(
-        missing.contains("<meta og:image>: `../../components/x.png` names no file"),
+        missing.contains("<meta og:image>: `../../components/x.png` does not exist"),
         "{missing}"
     );
     fs::write(root.join("components/x.png"), "").unwrap();
@@ -265,6 +490,7 @@ fn a_site_under_a_path_prefixes_every_rooted_reference() {
         "<!doctype html><title>t</title><link rel=\"stylesheet\" href=\"../styles/site.css\">",
         "<meta property=\"og:image\" content=\"../art/mark.svg\">",
         "<script type=\"module\" src=\"../scripts/app.js\"></script>",
+        "<style>p { background: url(/file.txt) }</style>",
         "<a href=\"/\">home</a><a href=\"/docs/a/#part\">rooted</a><a href=\"docs/a.html\">source</a>",
         "<a href=\"/file.txt\">public</a><a href=\"/api/x\">unchecked</a><a href=\"#top\">fragment</a>",
         "<a href=\"https://example.com/elsewhere\">out</a>",
@@ -279,11 +505,15 @@ fn a_site_under_a_path_prefixes_every_rooted_reference() {
             "pages/docs/a.html",
             "<a href=\"/\">home</a><img src=\"../../art/mark.svg\" alt=\"mark\">",
         ),
-        ("styles/site.css", "p { margin: 0 }\n"),
+        (
+            "styles/site.css",
+            "@import \"/extra.css\";\np { background: url(../art/mark.svg), url(/file.txt) }\n",
+        ),
         ("scripts/app.js", "console.log(1);\n"),
         ("art/mark.svg", SVG),
         ("public/file.txt", "a file"),
         ("public/a b.txt", "a file"),
+        ("public/extra.css", "p { margin: 0 }"),
     ];
     let root = site("e-prefix", &files);
     let built = build(&root);
@@ -296,6 +526,7 @@ fn a_site_under_a_path_prefixes_every_rooted_reference() {
         "<link rel=stylesheet href=/base/assets/site-",
         "content=https://example.com/base/assets/mark-",
         "<script type=module src=/base/assets/app-",
+        "<style>p{background:url(/base/file.txt)}</style>",
         "<a href=/base/>home</a><a href=/base/docs/a/#part>rooted</a><a href=/base/docs/a/>source</a>",
         "<a href=/base/file.txt>public</a><a href=/base/api/x>unchecked</a><a href=#top>fragment</a>",
         "<a href=https://example.com/elsewhere>out</a>",
@@ -307,6 +538,9 @@ fn a_site_under_a_path_prefixes_every_rooted_reference() {
     ] {
         assert!(home.contains(written), "{written} is not in {home}");
     }
+    let css = asset(&built, "css");
+    assert!(css.starts_with("@import \"/base/extra.css\";"), "{css}");
+    assert!(css.contains("url(/base/assets/mark-") && css.contains("url(/base/file.txt)"), "{css}");
     let docs = text(&built, "docs/a/index.html");
     assert!(docs.starts_with("<a href=/base/>home</a><img src=/base/assets/mark-"), "{docs}");
     let sitemap = text(&built, "sitemap.xml");
@@ -321,6 +555,8 @@ fn a_site_under_a_path_prefixes_every_rooted_reference() {
     );
     assert!(home.contains(r#"<a href="/base/docs/a/">source</a>"#), "{home}");
     assert!(fast.files.contains_key("_cinders/scripts/app.js"));
+    let css = text(&fast, "_cinders/styles/site.css");
+    assert!(css.contains("url(/base/_cinders/art/mark.svg), url(/base/file.txt)"), "{css}");
 
     let repeated = [
         ("cinders.toml", "[site]\nurl = \"https://example.com/base\"\n"),
@@ -328,7 +564,7 @@ fn a_site_under_a_path_prefixes_every_rooted_reference() {
         ("pages/about.html", "about"),
     ];
     let repeated = error(&site("e-prefix-twice", &repeated));
-    let expected = "pages/index.html: <a href>: `/base/about/` matches no route and no file in \
+    let expected = "pages/index.html: <a href>: `/base/about/` is not a route or a file in \
                     public/: write it without `/base`, which cinders adds";
     assert!(
         repeated.contains(expected),
@@ -338,6 +574,27 @@ fn a_site_under_a_path_prefixes_every_rooted_reference() {
 
 #[test]
 fn errors_name_the_problem() {
+    let style = "<style>@import \"other.css\"; p { color: red }</style>";
+    let root = site("e-import", &[("pages/index.html", style), ("pages/other.css", "")]);
+    let import = error(&root);
+    let expected = "pages/index.html: <style>: `@import \"other.css\"` in a <style> block: link \
+                    the stylesheet instead";
+    assert!(import.contains(expected), "{import}");
+
+    let files = [
+        ("pages/index.html", r#"<link rel="stylesheet" href="s.css">"#),
+        ("pages/s.css", "@import \"more.css\";\np { mask: url(m.svg) }\n"),
+        ("pages/more.css", "p { color: red"),
+    ];
+    let root = site("e-css", &files);
+    let missing = error(&root);
+    let expected = "pages/index.html: <link href>: pages/s.css: `m.svg` does not exist";
+    assert!(missing.contains(expected), "{missing}");
+    fs::remove_file(root.join("pages/more.css")).unwrap();
+    let import = error(&root);
+    let expected = "pages/index.html: <link href>: pages/s.css: `more.css` does not exist";
+    assert!(import.ends_with(expected), "a missing import is named: {import}");
+
     let root = site("e-twice", &[("pages/about.html", "a"), ("pages/about/index.html", "b")]);
     let twice = error(&root);
     assert!(twice.contains("both write about/index.html"), "{twice}");
@@ -346,7 +603,7 @@ fn errors_name_the_problem() {
     assert!(error(&root).contains("public/index.html and pages/index.html both write index.html"));
 
     let root = site("e-route", &[("pages/index.html", r#"<a href="/nope/">x</a>"#)]);
-    assert!(error(&root).contains("<a href>: `/nope/` matches no route and no file in public/"));
+    assert!(error(&root).contains("<a href>: `/nope/` is not a route or a file in public/"));
 
     let files = [("pages/index.html", r#"<a href="_part.html">x</a>"#), ("pages/_part.html", "")];
     assert!(error(&site("e-part", &files)).contains("`_part.html` is a page that is not built"));
@@ -366,7 +623,7 @@ fn errors_name_the_problem() {
     assert!(html.starts_with("<a href=/assets/notes-"), "outside pages/ it is a file: {html}");
 
     let files = [("pages/index.html", r#"<a href="blog">x</a>"#), ("pages/blog/a.html", "")];
-    assert!(error(&site("e-dir", &files)).contains("names a directory, not a file"));
+    assert!(error(&site("e-dir", &files)).contains("is a directory, not a file"));
 
     let root = site(
         "e-outside",
@@ -377,10 +634,10 @@ fn errors_name_the_problem() {
     let files =
         [("pages/index.html", r#"<img srcset="a.svg 1x, b.svg 2x">"#), ("pages/a.svg", SVG)];
     let srcset = error(&site("e-srcset", &files));
-    assert!(srcset.contains("pages/index.html: <img srcset>: `b.svg` names no file"), "{srcset}");
+    assert!(srcset.contains("pages/index.html: <img srcset>: `b.svg` does not exist"), "{srcset}");
 
     let files = [("pages/index.html", r#"<p style="mask: url(m.svg)">x</p>"#)];
     let style = error(&site("e-style", &files));
-    let expected = "pages/index.html: style attribute: `m.svg` names no file";
+    let expected = "pages/index.html: style attribute: `m.svg` does not exist";
     assert!(style.contains(expected), "{style}");
 }

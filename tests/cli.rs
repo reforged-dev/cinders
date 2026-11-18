@@ -56,21 +56,28 @@ fn prints_help_a_version_and_a_summary_of_a_build() {
         assert_eq!(run(&[flag]).out, format!("cinders {}\n", env!("CARGO_PKG_VERSION")));
     }
 
-    let files =
-        [("pages/index.html", "home"), ("pages/about.html", "about"), ("public/a.txt", "a")];
+    let stale = ".cinders/images/stale.avif";
+    let files = [
+        ("pages/index.html", "home"),
+        ("pages/about.html", "about"),
+        ("public/a.txt", "a"),
+        (stale, "an encode of an image the site no longer has"),
+    ];
     let root = common::site("summary", &files);
     let built = run(&["build", root.to_str().unwrap()]);
     let expected =
         format!("built 2 pages and 1 other file in {}, 10 bytes in ", root.join("dist").display());
     assert!(built.out.is_empty(), "the summary goes to standard error: {}", built.out);
     assert!(built.err.starts_with(&expected) && built.err.ends_with(" ms\n"), "{}", built.err);
+    assert!(!root.join(stale).exists(), "a build prunes the store");
 
-    let broken = common::site("summary-broken", &[("pages/index.html", r#"<a href="/x">x</a>"#)]);
+    let files = [("pages/index.html", r#"<a href="/x">x</a>"#), (stale, "kept")];
+    let broken = common::site("summary-broken", &files);
     let output = cinders(&["build", broken.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(1), "a failed build");
     let error = String::from_utf8(output.stderr).unwrap();
-    let expected =
-        "error: pages/index.html: <a href>: `/x` matches no route and no file in public/\n";
+    let expected = "error: pages/index.html: <a href>: `/x` is not a route or a file in public/\n";
     assert_eq!(error, expected);
     assert!(!broken.join("dist").exists(), "a failed build writes nothing");
+    assert!(broken.join(stale).exists(), "and prunes nothing");
 }

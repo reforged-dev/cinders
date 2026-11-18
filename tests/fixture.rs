@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 
 use cinders::Content;
-use common::{build, build_fast, fixture, text};
+use common::{asset, assets, build, build_fast, copy_dir, fixture, text};
 
 #[test]
 fn build_ships_pages_and_assets() {
@@ -22,6 +22,10 @@ fn build_ships_pages_and_assets() {
         "sitemap.xml",
     ];
     assert_eq!(paths, shipped, "routes, generated files, and public files");
+    for route in shipped.iter().filter(|path| path.ends_with(".html")) {
+        let html = text(&site, route);
+        assert!(!html.contains("../"), "every relative reference is rewritten: {html}");
+    }
 
     let home = text(&site, "index.html");
     assert!(home.starts_with("<!doctype html><html lang=en><meta charset=utf-8>"), "{home}");
@@ -29,15 +33,16 @@ fn build_ships_pages_and_assets() {
     assert!(home.contains("<pre>  kept\n    as written  </pre>"), "{home}");
     assert!(home.contains("<a href=/about/>about</a>, or <a href=/search/>"), "{home}");
     assert!(home.contains(r#"{ "@type": "WebSite" }"#), "other script types stay: {home}");
+    assert!(home.contains("<style>.hero{background:url(/assets/mark-"), "{home}");
     assert!(home.contains(r#"style="background-image: url(/assets/mark-"#), "{home}");
-    assert!(home.contains("<img src=/assets/mark-y0yc32kQ.svg alt=Mark>"), "{home}");
-    assert!(home.contains("srcset=\"/assets/shot-omOWxS2b.png 1x, /assets/photo-"), "{home}");
+    assert!(home.contains(".woff2 as=font type=font/woff2 crossorigin>"), "{home}");
 
     let notes = text(&site, "notes/index.html");
     let head = "<!doctype html><html lang=en><meta charset=utf-8><title>Notes</title>\
                 <link rel=stylesheet href=/assets/site-";
     assert!(notes.starts_with(head), "{notes}");
-    assert_eq!(notes.matches("<style>").count(), 1, "a component's style hoists once: {notes}");
+    let hoisted = ".css><style>.note{border-left:4px solid}</style><script";
+    assert!(notes.contains(hoisted), "a component's style hoists once: {notes}");
     assert_eq!(notes.matches("<script").count(), 1, "and so does its script: {notes}");
     let mark = "<aside class=\"note note-tip\"><img src=/assets/mark-y0yc32kQ.svg alt>";
     assert!(notes.contains(mark), "a component's paths resolve from its file: {notes}");
@@ -50,14 +55,77 @@ fn build_ships_pages_and_assets() {
 }
 
 #[test]
-fn fast_build_keeps_source_paths() {
+fn build_encodes_images() {
+    let site = build(&fixture());
+    let home = text(&site, "index.html");
+    let shot = "<img src=/assets/shot-FSVOwGIj.avif alt=\"A terminal\" width=64 height=48>";
+    assert!(home.contains(shot), "an encoded image is a plain `<img>` with its size: {home}");
+    assert_eq!(home.matches("<picture>").count(), 1, "and has no fallback around it: {home}");
+    assert!(home.contains(".avif alt=\"A photo\" width=32 height=24>"), "{home}");
+    assert!(home.contains("<img src=/assets/mark-y0yc32kQ.svg alt=Mark>"), "{home}");
+    assert!(
+        home.contains("<img src=/assets/shot-omOWxS2b.png alt=Hand-tuned>"),
+        "a `<picture>` the author wrote keeps its sources, fingerprinted: {home}"
+    );
+    assert!(home.contains("srcset=\"/assets/shot-omOWxS2b.png 1x, /assets/photo-"), "{home}");
+    assert_eq!(assets(&site, "avif").len(), 3);
+}
+
+#[test]
+fn build_bundles_styles() {
+    let site = build(&fixture());
+    let css = asset(&site, "css");
+    assert!(css.starts_with("body{margin:0;"), "imports are bundled and minified: {css}");
+    assert!(css.contains(".hero h1{color:red}"), "nesting is lowered: {css}");
+    assert!(
+        css.contains(r#".woff2)format("woff2")"#) && css.contains("url(/assets/mark-"),
+        "{css}"
+    );
+    assert_eq!(assets(&site, "woff2").len(), 1);
+}
+
+#[test]
+fn fast_build_skips_the_slow_steps() {
     let site = build_fast(&fixture());
     assert!(!site.files.keys().any(|path| path.starts_with("assets/")));
     let home = text(&site, "index.html");
     assert!(home.contains("<!-- A comment"), "pages are not minified: {home}");
+    assert!(home.contains(r#"<img src="/_cinders/images/shot.png" alt="A terminal">"#), "{home}");
     assert!(home.contains(r#"<img src="/_cinders/images/mark.svg" alt="Mark">"#), "{home}");
+    assert!(home.contains(r#"href="/_cinders/fonts/GeistMono.ttf" as="font" type="font/ttf""#));
     assert!(home.contains(r#"<a href="/about/">"#), "{home}");
+    assert!(home.contains(".hero {\n  background: url(/_cinders/images/mark.svg);"), "{home}");
     assert!(matches!(site.files["_cinders/images/shot.png"], Content::File(_)));
+    let css = text(&site, "_cinders/styles/site.css");
+    assert!(css.contains("margin: 0"), "imports are bundled: {css}");
+    assert!(css.contains(r#"url(/_cinders/fonts/GeistMono.ttf) format("truetype")"#), "{css}");
+    assert!(!fixture().join("dist").exists(), "a build writes nothing by itself");
+}
+
+/// The fixture's committed store holds what this platform encodes, and nothing else.
+#[test]
+fn store_matches_fresh_encodes() {
+    let fresh = Path::new(env!("CARGO_TARGET_TMPDIR")).join("fresh");
+    fs::remove_dir_all(&fresh).unwrap_or_default();
+    copy_dir(&fixture(), &fresh, ".cinders");
+    let stored = build(&fixture());
+    let encoded = build(&fresh);
+    for (path, content) in &stored.files {
+        let same = *content.bytes().unwrap() == *encoded.files[path].bytes().unwrap();
+        assert!(same, "{path} differs between the committed store and a fresh encode");
+    }
+    assert_eq!(stored.files.len(), encoded.files.len());
+    for (kind, count) in [("images", 6), ("fonts", 1)] {
+        let entries = fs::read_dir(fixture().join(".cinders").join(kind)).unwrap().count();
+        assert_eq!(entries, count, "stale or missing entries in the fixture's .cinders/{kind}");
+    }
+
+    let junk = fresh.join(".cinders/images/junk.avif");
+    fs::write(&junk, "junk").unwrap();
+    encoded.store.prune().unwrap();
+    assert!(!junk.exists(), "pruning deletes what the build did not use");
+    assert_eq!(fs::read_dir(fresh.join(".cinders/images")).unwrap().count(), 6);
+    assert_eq!(fs::read_dir(fresh.join(".cinders/fonts")).unwrap().count(), 1);
 }
 
 #[test]

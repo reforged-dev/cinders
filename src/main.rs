@@ -68,6 +68,7 @@ fn build(dir: &Path) -> Result<()> {
     let site = cinders::build(dir, Mode::Optimized)?;
     let dist = dir.join("dist");
     site.write(&dist)?;
+    site.store.prune()?;
     let pages = site.files.keys().filter(|path| path.ends_with(".html")).count();
     let sizes = site.files.values().map(|content| match content {
         Content::Bytes(bytes) => bytes.len() as u64,

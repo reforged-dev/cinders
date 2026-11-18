@@ -3,21 +3,27 @@
 
 mod asset;
 mod css;
+mod font;
 mod html;
+mod image;
 mod minify;
 mod reference;
 
+use std::fs;
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::thread;
 
 use anyhow::{Context, Result};
+use lightningcss::targets::Targets;
 use rayon::prelude::*;
 
 use crate::Mode;
 use crate::config::Config;
 use crate::paths;
 use crate::site::{Content, Page, Rendered, Site};
-use crate::store::Store;
-use asset::Assets;
+use asset::{Assets, Kind};
+use html::Found;
 use reference::{References, Target};
 
 /// What the passes over a page share.
@@ -25,6 +31,8 @@ struct Optimizer<'a> {
     root: &'a Path,
     config: &'a Config,
     mode: Mode,
+    /// The browsers that stylesheets are lowered for.
+    targets: Targets,
     references: References<'a>,
     assets: Assets<'a>,
 }
@@ -36,9 +44,14 @@ pub(crate) fn optimize(
     rendered: Rendered,
     mode: Mode,
 ) -> Result<Site> {
-    let references = References::new(root, config);
-    let mut optimizer =
-        Optimizer { root, config, mode, references, assets: Assets::new(root, mode) };
+    let mut optimizer = Optimizer {
+        root,
+        config,
+        mode,
+        targets: css::targets(config)?,
+        references: References::new(root, config),
+        assets: Assets::new(root, config, mode),
+    };
     optimizer.add_public(&root.join("public"), "")?;
     for (path, text) in rendered.files {
         optimizer.references.add(&path);
@@ -52,13 +65,14 @@ pub(crate) fn optimize(
         optimizer.assets.put(page.path.clone(), from, Content::Bytes(Vec::new()))?;
     }
 
+    optimizer.prepare(&rendered.pages)?;
     let pages = rendered.pages.par_iter().map(|page| optimizer.page(page));
     let pages: Vec<String> = pages.collect::<Result<_>>()?;
-    let mut files = optimizer.assets.into_files();
+    let mut site = optimizer.assets.into_site();
     for (page, html) in rendered.pages.into_iter().zip(pages) {
-        files.insert(page.path, Content::Bytes(html.into_bytes()));
+        site.files.insert(page.path, Content::Bytes(html.into_bytes()));
     }
-    Ok(Site { files, prefix: config.prefix().to_string(), store: Store::new(root) })
+    Ok(site)
 }
 
 impl Optimizer<'_> {
@@ -80,6 +94,43 @@ impl Optimizer<'_> {
         Ok(())
     }
 
+    /// Scans `pages`, then builds what the scan found: the characters that fonts are subset
+    /// to, the stylesheets, and the images. The pass that rewrites each page's references
+    /// then finds every result ready.
+    fn prepare(&self, pages: &[Page]) -> Result<()> {
+        let found = pages.par_iter().map(|page| html::scan(self, page));
+        let found = found.reduce(Found::default, Found::merge);
+        let mut chars = found.chars;
+        if self.mode == Mode::Optimized {
+            for file in &self.config.fonts.scan {
+                let text = fs::read_to_string(self.root.join(file))
+                    .with_context(|| format!("cinders.toml: [fonts] scan: {file}"))?;
+                chars.extend(text.chars());
+            }
+            // CSS draws text that no page holds: its own strings, and the other case of a
+            // letter under `text-transform`.
+            for file in &found.styles {
+                chars.extend(css::file_strings(file).chars());
+            }
+        }
+        let cased: Vec<char> =
+            chars.iter().flat_map(|c| c.to_uppercase().chain(c.to_lowercase())).collect();
+        chars.extend(cased);
+        self.assets.chars.set(chars.into_iter().collect()).unwrap_or_default();
+        // A failure is kept, and the rewrite reports it with the page that asked.
+        thread::scope(|threads| {
+            // A stylesheet's build waits on the thread pool, so each runs on its own thread,
+            // where it cannot pick up a second one.
+            for file in &found.styles {
+                threads.spawn(move || self.asset(file, Kind::Css));
+            }
+            found.images.par_iter().for_each(|file| {
+                self.asset(file, Kind::Image).map(drop).unwrap_or_default();
+            });
+        });
+        Ok(())
+    }
+
     /// The HTML that `page` ships.
     fn page(&self, page: &Page) -> Result<String> {
         let html = html::rewrite(self, page);
@@ -91,19 +142,26 @@ impl Optimizer<'_> {
     }
 
     /// The rooted URL that `value` names in the built site, before the site's prefix, or
-    /// `None` if it ships as written. `value` is a reference written in a file in `dir`.
-    fn rooted(&self, dir: &Path, value: &str) -> Result<Option<String>> {
+    /// `None` if it ships as written. `value` is a reference written in a file in `dir`, and
+    /// a file it names is processed as `kind`.
+    fn rooted(&self, dir: &Path, value: &str, kind: Kind) -> Result<Option<String>> {
         Ok(match self.references.resolve(dir, value)? {
             Target::Unchanged => None,
             Target::Rooted(url) => Some(url),
-            Target::File(file, suffix) => Some(format!("{}{suffix}", self.assets.asset(&file)?)),
+            Target::File(file, suffix) => Some(format!("{}{suffix}", self.asset(&file, kind)?.url)),
         })
     }
 
     /// The URL to write in place of `value`, a reference written in a file in `dir`, or `None`
-    /// to leave it as it is.
-    fn reference(&self, dir: &Path, value: &str) -> Result<Option<String>> {
-        let url = self.rooted(dir, value)?.map(|url| format!("{}{url}", self.config.prefix()));
+    /// to leave it as it is. A file it names is processed as `kind`.
+    fn reference(&self, dir: &Path, value: &str, kind: Kind) -> Result<Option<String>> {
+        let url = self.rooted(dir, value, kind)?;
+        let url = url.map(|url| format!("{}{url}", self.config.prefix()));
         Ok(url.filter(|url| url != value))
     }
+}
+
+/// Locks `mutex`, poisoned or not, since a panic on any thread ends the build.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
