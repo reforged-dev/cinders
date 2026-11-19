@@ -29,6 +29,12 @@ pub(super) fn encode(source: &[u8], quality: u8, max_width: u32) -> Result<Encod
     Ok(Encoded { avif: encode_avif(&rgba, quality)?, width: rgba.width(), height: rgba.height() })
 }
 
+/// Whether `source` is an animated PNG, which has an `acTL` chunk before its first `IDAT`.
+pub(super) fn is_animated(source: &[u8]) -> bool {
+    let data = source.windows(4).position(|chunk| chunk == b"IDAT").unwrap_or(source.len());
+    source.starts_with(b"\x89PNG") && source[..data].windows(4).any(|chunk| chunk == b"acTL")
+}
+
 /// What `max_width` adds to the store key: the scaling, for an image that it may shrink, and
 /// nothing for any other, so that a new limit keeps the other encodes. Either side counts,
 /// since EXIF orientation can turn the image.

@@ -134,9 +134,15 @@ fn css_strings_and_rooted_imports() {
         html.contains(r#"url("data:,a\a b")}.z{top:0}"#),
         "a line break, written as an escape, is written back as one: {html}"
     );
-    let files = [("pages/index.html", r#"<style>.x::before{content:"</style\3e "}</style>x"#)];
+    let files =
+        [("pages/index.html", r#"<style>.x::before{content:"</style\3e "}.z{top:0}</style>x"#)];
     let html = text(&build(&common::site("css-end", &files)), "index.html");
-    assert!(html.ends_with("</style>x") && html.matches("</style").count() == 1, "{html}");
+    assert!(html.ends_with(".z{top:0}</style>x"), "the rule after the string is kept: {html}");
+    assert_eq!(
+        html.matches("</style").count(),
+        1,
+        "`</style` in the string is not an end tag: {html}"
+    );
 }
 
 #[test]
@@ -247,11 +253,22 @@ fn svg_links_and_entity_quoted_styles() {
 
 #[test]
 fn scripts_that_cannot_import() {
-    let page = r#"<script src="../legacy.js"></script><button onclick="hello()">x</button>"#;
-    let legacy = "function hello() { alert('hi') }\nvar counter = 0;\n";
+    let page = concat!(
+        r#"<script src="../legacy.js"></script><button onclick="hello()">x</button>"#,
+        "<script>/*! inline 1.0, MIT */\n// a note\nvar inline = 1;</script>",
+        r#"<script type="module">console.log(import.meta.url)</script>"#,
+    );
+    let legacy = "/*! legacy 1.0, MIT */\n// a note\nfunction hello() { alert('hi') }\n\
+                  var counter = 0;\n";
     let root = site("classic", &[("pages/index.html", page), ("legacy.js", legacy)]);
-    let js = asset(&build(&root), "js");
+    let built = build(&root);
+    let js = asset(&built, "js");
     assert!(js.contains("function hello") && js.contains("counter"), "{js}");
+    assert!(js.starts_with("/*! legacy 1.0, MIT */") && !js.contains("a note"), "{js}");
+    let html = text(&built, "index.html");
+    assert!(html.contains("<script>/*! inline 1.0, MIT */"), "license comments stay: {html}");
+    assert!(!html.contains("a note"), "other comments are removed: {html}");
+    assert!(html.contains("console.log(import.meta.url)"), "import.meta is allowed: {html}");
 
     let page = r#"<script>import "./x.js"</script>"#;
     let root = site("inline-import", &[("pages/index.html", page), ("pages/x.js", "")]);
@@ -422,6 +439,15 @@ fn images_that_are_left_alone() {
     assert!(error.contains("pages/index.html: <img src>: pages/a.png: decoding"), "{error}");
     let fast = build_fast(&root);
     assert!(matches!(fast.files["_cinders/pages/a.png"], Content::File(_)), "nothing decodes it");
+
+    let animated = fixture().join("../animated.png");
+    fs::copy(&animated, root.join("pages/a.png")).unwrap();
+    let site = build(&root);
+    let html = text(&site, "index.html");
+    assert!(html.starts_with("<img src=/assets/a-") && html.ends_with(".png>"), "{html}");
+    let shipped = site.files[assets(&site, "png")[0]].bytes().unwrap().into_owned();
+    assert_eq!(shipped, fs::read(animated).unwrap(), "an animated PNG ships unchanged");
+    assert!(!root.join(".cinders").exists(), "and nothing is encoded");
 }
 
 #[test]
@@ -473,6 +499,18 @@ fn public_ships_every_file_but_the_systems() {
     fs::write(root.join("public/reindex.html"), "no index").unwrap();
     let named = error(&root);
     assert!(named.contains("`/re` is not a route"), "only index.html names its directory: {named}");
+
+    fs::write(root.join("pages/index.html"), "home").unwrap();
+    fs::create_dir_all(root.join("public/assets")).unwrap();
+    fs::write(root.join("public/assets/.DS_Store"), "the system's").unwrap();
+    assert_eq!(text(&build(&root), "index.html"), "home", "an empty public/assets/ is allowed");
+    fs::write(root.join("public/assets/logo.svg"), SVG).unwrap();
+    let expected = "public/assets/logo.svg: /assets/ is for fingerprinted files, which a host \
+                    caches for a year. Move it out of public/assets/, or reference it by a \
+                    relative path";
+    assert_eq!(error(&root), expected, "a file in public/assets/ is an error");
+    let fast = cinders::build(&root, Mode::Fast).map(drop).unwrap_err();
+    assert_eq!(format!("{fast:#}"), expected, "in a fast build too");
 }
 
 #[test]
@@ -633,6 +671,11 @@ fn errors_name_the_problem() {
     let import = error(&root);
     let expected = "pages/index.html: <link href>: pages/s.css: `more.css` does not exist";
     assert!(import.ends_with(expected), "a missing import is named: {import}");
+    fs::write(root.join("pages/s.css"), "@import \"../../e-css-outside.css\";\n").unwrap();
+    fs::write(root.join("../e-css-outside.css"), "p { color: red }").unwrap();
+    let outside = error(&root);
+    let expected = "pages/s.css: `../../e-css-outside.css` is outside the site directory";
+    assert!(outside.ends_with(expected), "an import outside the site is an error: {outside}");
 
     let root = site("e-twice", &[("pages/about.html", "a"), ("pages/about/index.html", "b")]);
     let twice = error(&root);

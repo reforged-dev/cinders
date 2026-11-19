@@ -371,7 +371,12 @@ impl<'s> Parser<'s> {
         } else if (lower == "script" || lower == "style") && !tag.self_closing {
             // Braces are literal in a script or a style, so the body is kept as written.
             let rest = self.rest();
-            let end = rest.to_ascii_lowercase().find(&format!("</{lower}"));
+            let lowered = rest.to_ascii_lowercase();
+            let close = format!("</{lower}");
+            // An end tag has whitespace, `/`, or `>` after its name, so `</scripture>` is not one.
+            let after = |c: char| c.is_ascii_whitespace() || c == '/' || c == '>';
+            let named = |at: &usize| lowered[at + close.len()..].starts_with(after);
+            let end = lowered.match_indices(&close).map(|(at, _)| at).find(named);
             let end = end.ok_or_else(|| self.error(start, format!("unclosed <{lower}>")))?;
             self.pos += rest[end..].find('>').map_or(rest.len(), |close| end + close + 1);
             Node::Raw { tag, body: rest[..end].to_string(), hoist: self.depth == 0 }

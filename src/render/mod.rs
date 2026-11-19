@@ -9,7 +9,7 @@ use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use rayon::prelude::*;
 
 use crate::config::Config;
@@ -45,6 +45,9 @@ pub fn render(root: &Path, config: &Config) -> Result<Rendered> {
         let name = file.file_name().unwrap_or_default().to_string_lossy();
         name.ends_with(".html") && !name.starts_with(['_', '.'])
     });
+    // Without this, a build in the wrong directory writes an empty site and empties `dist/`.
+    let dir = pages_dir.display();
+    ensure!(!routes.is_empty(), "{dir} has no .html file, so there is no site to build");
     let render = |file: PathBuf| {
         let text = read(&file)?;
         if text.starts_with("---\n") || text.starts_with("---\r\n") {

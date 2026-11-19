@@ -84,6 +84,10 @@ impl Config {
 fn is_address(url: &str) -> bool {
     let host = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"));
     host.is_some_and(|host| {
-        !host.is_empty() && !host.starts_with('/') && !host.contains(['?', '#'])
+        let malformed = |c: char| c.is_whitespace() || "?#".contains(c);
+        !host.is_empty()
+            && !host.starts_with('/')
+            && !host.contains("//")
+            && !host.contains(malformed)
     })
 }

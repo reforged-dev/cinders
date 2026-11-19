@@ -1,5 +1,5 @@
-# Publishes a release when a version tag is pushed. A manual run builds the archives and
-# publishes nothing, so the workflow can be tried without a tag.
+# Publishes a release when a version tag is pushed and its commit passes the check suite. A
+# manual run does everything except publish, so the workflow can be tried without a tag.
 name: Release
 on:
   push:
@@ -8,6 +8,8 @@ on:
 permissions:
   contents: read
 jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
   package:
     name: ${{ matrix.target }}
     strategy:
@@ -43,7 +45,7 @@ jobs:
           path: archives/cinders-${{ matrix.target }}.tar.gz
           if-no-files-found: error
   publish:
-    needs: package
+    needs: [check, package]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 15

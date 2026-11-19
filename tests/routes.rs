@@ -139,10 +139,16 @@ fn sitemap_and_robots_yield_to_public_files() {
 }
 
 #[test]
-fn a_site_with_no_pages_renders_nothing() {
-    let rendered = common::render(&common::site("r-empty", &[URL])).unwrap();
-    assert!(rendered.pages.is_empty());
-    assert_eq!(rendered.files["sitemap.xml"], sitemap(&[]));
+fn a_site_with_no_pages_is_an_error() {
+    let files = [URL, ("pages/_draft.html", "draft"), ("pages/notes.md", "notes")];
+    let error = common::render_error(&common::site("r-empty", &files));
+    let expected = "r-empty/pages has no .html file, so there is no site to build";
+    assert!(error.ends_with(expected), "{error}");
+    let error = common::render_error(&common::site("r-bare", &[("dist/kept.txt", "kept")]));
+    assert!(
+        error.contains("r-bare/pages has no .html file"),
+        "a directory with no pages/ fails too: {error}"
+    );
 }
 
 #[test]

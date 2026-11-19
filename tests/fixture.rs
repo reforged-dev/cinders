@@ -3,15 +3,36 @@
 
 mod common;
 
+use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use cinders::Content;
 use common::{asset, assets, build, build_fast, copy_dir, fixture, text};
 
+/// A scratch copy of the fixture, including its store. Tests build the copy because a build
+/// writes missing store entries, and the committed store must not change.
+fn copied() -> &'static Path {
+    static COPY: OnceLock<PathBuf> = OnceLock::new();
+    COPY.get_or_init(|| {
+        let copy = Path::new(env!("CARGO_TARGET_TMPDIR")).join("fixture");
+        fs::remove_dir_all(&copy).unwrap_or_default();
+        copy_dir(&fixture(), &copy, "dist");
+        copy
+    })
+}
+
+/// The names of the entries of `kind` in the store of the site in `root`.
+fn entries(root: &Path, kind: &str) -> BTreeSet<OsString> {
+    let entries = fs::read_dir(root.join(".cinders").join(kind)).unwrap();
+    entries.map(|entry| entry.unwrap().file_name()).collect()
+}
+
 #[test]
 fn build_ships_pages_and_assets() {
-    let site = build(&fixture());
+    let site = build(copied());
     let paths: Vec<_> = site.files.keys().filter(|path| !path.starts_with("assets/")).collect();
     let shipped = [
         "404.html",
@@ -58,7 +79,7 @@ fn build_ships_pages_and_assets() {
 
 #[test]
 fn build_encodes_images() {
-    let site = build(&fixture());
+    let site = build(copied());
     let home = text(&site, "index.html");
     let shot = "<img src=/assets/shot-FSVOwGIj.avif alt=\"A terminal\" width=64 height=48>";
     assert!(home.contains(shot), "an encoded image is a plain `<img>` with its size: {home}");
@@ -75,7 +96,7 @@ fn build_encodes_images() {
 
 #[test]
 fn build_bundles_scripts_and_styles() {
-    let site = build(&fixture());
+    let site = build(copied());
     let css = asset(&site, "css");
     assert!(css.starts_with("body{margin:0;"), "imports are bundled and minified: {css}");
     assert!(css.contains(".hero h1{color:red}"), "nesting is lowered: {css}");
@@ -126,16 +147,17 @@ fn store_matches_fresh_encodes() {
     let fresh = Path::new(env!("CARGO_TARGET_TMPDIR")).join("fresh");
     fs::remove_dir_all(&fresh).unwrap_or_default();
     copy_dir(&fixture(), &fresh, ".cinders");
-    let stored = build(&fixture());
+    let stored = build(copied());
     let encoded = build(&fresh);
     for (path, content) in &stored.files {
         let same = *content.bytes().unwrap() == *encoded.files[path].bytes().unwrap();
         assert!(same, "{path} differs between the committed store and a fresh encode");
     }
     assert_eq!(stored.files.len(), encoded.files.len());
-    for (kind, count) in [("images", 6), ("fonts", 1)] {
-        let entries = fs::read_dir(fixture().join(".cinders").join(kind)).unwrap().count();
-        assert_eq!(entries, count, "stale or missing entries in the fixture's .cinders/{kind}");
+    for kind in ["images", "fonts"] {
+        let committed = entries(&fixture(), kind);
+        let fresh = entries(&fresh, kind);
+        assert_eq!(committed, fresh, "stale or missing entries in the fixture's .cinders/{kind}");
     }
 
     let junk = fresh.join(".cinders/images/junk.avif");
@@ -148,7 +170,7 @@ fn store_matches_fresh_encodes() {
 
 #[test]
 fn write_replaces_the_output_directory() {
-    let site = build(&fixture());
+    let site = build(copied());
     let dist = Path::new(env!("CARGO_TARGET_TMPDIR")).join("written-fixture");
     fs::remove_dir_all(&dist).unwrap_or_default();
     // What an earlier build left: stale directories, a longer file, a file where a directory

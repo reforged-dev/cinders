@@ -56,8 +56,14 @@ main() {
     # Copy to a temporary name, then rename. Writing straight over the old binary could
     # stop a cinders that is running.
     cp "$name/cinders" "$bin/cinders.new"
+    # Check that the new binary runs before it replaces the installed one.
+    version=$("$bin/cinders.new" --version) || {
+        rm -f "$bin/cinders.new"
+        echo "the downloaded cinders does not run on this system" >&2
+        exit 1
+    }
     mv -f "$bin/cinders.new" "$bin/cinders"
-    echo "installed $("$bin/cinders" --version) in $bin"
+    echo "installed $version in $bin"
     case :$PATH: in
         *":$bin:"*) ;;
         *) echo "$bin is not on your PATH. Add it to run cinders by name." ;;

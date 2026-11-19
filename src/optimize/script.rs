@@ -120,8 +120,8 @@ pub(super) fn minify(code: &str, kind: Kind, mode: Mode) -> Result<String> {
     if let Some(error) = parsed.diagnostics.first().or(checked.diagnostics.first()) {
         bail!("{error}");
     }
-    // The parser accepts import and export even in a classic script.
-    if parsed.module_record.has_module_syntax {
+    // Inline scripts are not joined, so they cannot import or export. `import.meta` is allowed.
+    if parsed.program.body.iter().any(Statement::is_module_declaration) {
         bail!("this script cannot import or export; give it type=\"module\" and a src");
     }
     if mode == Mode::Fast {
@@ -149,7 +149,9 @@ fn shrink<'a>(allocator: &'a Allocator, mut program: Program<'a>, how: Shrink) -
         mangle_properties: None,
         compress: Some(CompressOptions::smallest()),
     };
-    let mut codegen = CodegenOptions::minify();
+    // Keep license comments, which vendored libraries need.
+    let comments = CommentOptions { legal: LegalComment::Inline, ..CommentOptions::disabled() };
+    let codegen = CodegenOptions { comments, ..CodegenOptions::minify() };
     if how.joined {
         // Joined modules compress first with `let` and `const` intact, so constants inline,
         // and then with each as `var`, so one statement declares every top-level name.
@@ -164,9 +166,6 @@ fn shrink<'a>(allocator: &'a Allocator, mut program: Program<'a>, how: Shrink) -
                 declaration.kind = VariableDeclarationKind::Var;
             }
         }
-        // License comments stay, which vendored libraries carry.
-        codegen.comments =
-            CommentOptions { legal: LegalComment::Inline, ..CommentOptions::disabled() };
     }
     let minified = Minifier::new(options(how.mangle)).minify(allocator, &mut program);
     Codegen::new().with_options(codegen).with_scoping(minified.scoping).build(&program).code

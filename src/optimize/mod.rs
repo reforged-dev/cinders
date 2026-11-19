@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use lightningcss::targets::Targets;
 use rayon::prelude::*;
 
@@ -88,6 +88,13 @@ impl Optimizer<'_> {
                 self.add_public(&entry.path(), &format!("{path}/"))?;
             // macOS leaves a `.DS_Store` in any directory its file manager has shown.
             } else if name != ".DS_Store" {
+                // Hosts cache `/assets/` for a year, so a file with no fingerprint goes stale.
+                ensure!(
+                    path != "assets" && !path.starts_with("assets/"),
+                    "public/{path}: /assets/ is for fingerprinted files, which a host caches \
+                     for a year. Move it out of public/assets/, or reference it by a relative \
+                     path"
+                );
                 self.references.add(&path);
                 let from = format!("public/{path}");
                 self.assets.put(path, from, Content::File(entry.path()))?;
@@ -122,7 +129,7 @@ impl Optimizer<'_> {
                 // CSS draws text that no page holds: its own strings, and the other case of
                 // a letter under `text-transform`.
                 for file in &found.styles {
-                    chars.extend(css::file_strings(file).chars());
+                    chars.extend(css::file_strings(self.root, file).chars());
                 }
             }
             let cased: Vec<char> =

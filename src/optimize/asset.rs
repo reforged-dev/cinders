@@ -100,11 +100,13 @@ impl Optimizer<'_> {
                 ("js".to_string(), Content::Bytes(code.into_bytes()))
             }
             Kind::Font => ("woff2".to_string(), Content::Bytes(assets.subset(file)?)),
-            Kind::Image => {
-                let image = assets.encode(file)?;
-                size = Some((image.width, image.height));
-                ("avif".to_string(), Content::Bytes(image.avif))
-            }
+            Kind::Image => match assets.encode(file)? {
+                Some(image) => {
+                    size = Some((image.width, image.height));
+                    ("avif".to_string(), Content::Bytes(image.avif))
+                }
+                None => (paths::extension(file), Content::File(file.to_path_buf())),
+            },
         };
         Ok(Asset { url: assets.emit(file, &extension, content)?, size })
     }
@@ -130,9 +132,13 @@ impl<'a> Assets<'a> {
         Site { files, prefix: self.config.prefix().to_string(), store: self.store }
     }
 
-    /// Encodes the image `file`, or takes the encode from the store.
-    fn encode(&self, file: &Path) -> Result<Encoded> {
+    /// Encodes the image `file`, or reads the encode from the store. Returns `None` for an
+    /// animated PNG, which ships unchanged, because the encoder writes only one frame.
+    fn encode(&self, file: &Path) -> Result<Option<Encoded>> {
         let source = fs::read(file)?;
+        if image::is_animated(&source) {
+            return Ok(None);
+        }
         let images = &self.config.images;
         let scaling = image::scaling(&source, images.max_width);
         let settings = image::SETTINGS.as_bytes();
@@ -146,7 +152,7 @@ impl<'a> Assets<'a> {
             Some(Encoded { avif: self.store.read(&avif)?, width, height })
         };
         if let Some(image) = stored() {
-            return Ok(image);
+            return Ok(Some(image));
         }
         let start = Instant::now();
         let image = image::encode(&source, images.avif, images.max_width)?;
@@ -154,7 +160,7 @@ impl<'a> Assets<'a> {
         eprintln!("encoded {name} in {:.1} s", start.elapsed().as_secs_f32());
         self.store.write(&avif, &image.avif)?;
         self.store.write(&size, format!("{} {}", image.width, image.height).as_bytes())?;
-        Ok(image)
+        Ok(Some(image))
     }
 
     /// Subsets the font `file` to the site's characters, or takes the subset from the store.

@@ -78,6 +78,8 @@ fn config_rejects_what_it_does_not_know() {
         ("c-url-query", "\"https://x.example/?a\""),
         ("c-url-fragment", "\"https://x.example/#a\""),
         ("c-url-host", "\"https:///docs\""),
+        ("c-url-space", "\"https://x .example\""),
+        ("c-url-slashes", "\"https://x.example//docs\""),
         ("c-url-kind", "1"),
     ] {
         let error = config_error(name, &format!("[site]\nurl = {url}\n"));

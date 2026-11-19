@@ -224,6 +224,13 @@ fn braces_are_literal_in_scripts_styles_and_comments() {
     assert_eq!(page(source), source);
     let source = r#"<script type="module" src={page.url}>let o = {};</script>"#;
     assert_eq!(page(source), r#"<script type="module" src="/">let o = {};</script>"#);
+    let source =
+        "<script>a = \"</scripture>\"; b = {}</SCRIPT ><style>p { --x: \"</styles>\" }</style>";
+    assert_eq!(
+        page(source),
+        source.replace("</SCRIPT >", "</script>"),
+        "`</scripture>` and `</styles>` are not end tags"
+    );
 }
 
 #[test]

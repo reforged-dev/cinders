@@ -63,19 +63,21 @@ fn version(text: &str) -> Option<u32> {
 }
 
 /// Reads files from disk and leaves an `@import` of an external URL in place.
-struct Files {
+struct Files<'a> {
+    /// The site directory. An import of a file outside it is an error.
+    root: &'a Path,
     provider: FileProvider,
     /// The strings of every file read.
     strings: Mutex<String>,
 }
 
-impl Files {
-    fn new() -> Files {
-        Files { provider: FileProvider::new(), strings: Mutex::default() }
+impl Files<'_> {
+    fn new(root: &Path) -> Files<'_> {
+        Files { root, provider: FileProvider::new(), strings: Mutex::default() }
     }
 }
 
-impl SourceProvider for Files {
+impl SourceProvider for Files<'_> {
     type Error = io::Error;
 
     fn read<'a>(&'a self, file: &Path) -> io::Result<&'a str> {
@@ -88,14 +90,14 @@ impl SourceProvider for Files {
         if external(specifier) {
             return Ok(ResolveResult::External(specifier.to_string()));
         }
-        let file = from.with_file_name(paths::percent_decode(paths::split(specifier).path));
-        if !file.exists() {
-            return Err(io::Error::new(
-                ErrorKind::NotFound,
-                format!("`{specifier}` does not exist"),
-            ));
-        }
-        Ok(file.into())
+        let path = paths::percent_decode(paths::split(specifier).path);
+        let file = paths::normalize(&from.with_file_name(path));
+        let problem = match file.exists() {
+            false => "does not exist",
+            true if !file.starts_with(self.root) => "is outside the site directory",
+            true => return Ok(file.into()),
+        };
+        Err(io::Error::new(ErrorKind::InvalidInput, format!("`{specifier}` {problem}")))
     }
 }
 
@@ -166,20 +168,20 @@ pub(super) fn strings(css: &str) -> String {
 
 /// The text of the strings in the stylesheet `path` and in the stylesheets it imports. An
 /// error waits for the build of the stylesheet, which reports it.
-pub(super) fn file_strings(path: &Path) -> String {
-    let files = Files::new();
+pub(super) fn file_strings(root: &Path, path: &Path) -> String {
+    let files = Files::new(root);
     Bundler::new(&files, None, ParserOptions::default()).bundle(path).map(drop).unwrap_or_default();
     files.strings.into_inner().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Builds a linked stylesheet with its local imports inlined.
 pub(super) fn file(optimizer: &Optimizer, path: &Path) -> Result<String> {
-    let files = Files::new();
+    let files = Files::new(optimizer.root);
     let mut bundler = Bundler::new(&files, None, ParserOptions::default());
     let sheet = bundler.bundle(path).map_err(|e| match &e.kind {
-        // The message names the missing import, so the place of the rule adds nothing.
-        BundleErrorKind::ResolverError(missing) if missing.kind() == ErrorKind::NotFound => {
-            anyhow!("{missing}")
+        // The message already names the import, so the rule's location is left out.
+        BundleErrorKind::ResolverError(refused) if refused.kind() == ErrorKind::InvalidInput => {
+            anyhow!("{refused}")
         }
         _ => anyhow!("{e}"),
     })?;
