@@ -1,0 +1,12 @@
+// Serves a cinders site from Cloudflare Workers as static assets. Copy this directory's
+// files into the site, set the name, and run `wrangler deploy` there.
+{
+  "name": "cinders-example",
+  "compatibility_date": "2026-05-01",
+  "build": { "command": "cinders build" },
+  "assets": {
+    "directory": "./dist",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page"
+  }
+}
