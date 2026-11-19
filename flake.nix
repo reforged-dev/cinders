@@ -110,6 +110,9 @@
                   "rust-src"
                   "rust-analyzer"
                 ])
+                # Used by scripts/notices.sh to write NOTICES.md.
+                pkgs.pkgsBuildHost.cargo-about
+                pkgs.pkgsBuildHost.jq
               ]
               ++ nativeTools pkgs;
             }

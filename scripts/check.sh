@@ -22,6 +22,7 @@ step "lints" cargo clippy --all-targets --quiet -- -D warnings
 step "tests" cargo test --quiet
 step "shipped binary" cargo build --profile dist --quiet
 step "portability" scripts/portable.sh "$bin"
+step "notices" scripts/notices.sh --check
 if [ -n "$failed" ]; then
     echo "failed:$failed" >&2
     exit 1
