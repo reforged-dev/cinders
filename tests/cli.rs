@@ -63,6 +63,7 @@ fn prints_help_a_version_and_a_summary_of_a_build() {
 
     let stale = ".cinders/images/stale.avif";
     let files = [
+        ("cinders.toml", "[navigation]\nclient = false\n"),
         ("pages/index.html", "home"),
         ("pages/about.html", "about"),
         ("public/a.txt", "a"),
@@ -85,4 +86,52 @@ fn prints_help_a_version_and_a_summary_of_a_build() {
     assert_eq!(error, expected);
     assert!(!broken.join("dist").exists(), "a failed build writes nothing");
     assert!(broken.join(stale).exists(), "and prunes nothing");
+}
+
+#[test]
+fn build_prints_notes_for_unmarked_scripts() {
+    let unmarked = [
+        (
+            "pages/index.html",
+            r#"<script type="module" src="../scripts/app.ts"></script><p>home</p>"#,
+        ),
+        ("pages/about.html", "<p>about</p>"),
+        ("scripts/app.ts", "console.log('hi');"),
+    ];
+    let root = common::site("build-note-unmarked", &unmarked);
+    let built = run(&["build", root.to_str().unwrap()]);
+    assert!(built.out.is_empty(), "notes and the summary go to standard error: {}", built.out);
+    let lines: Vec<&str> = built.err.lines().collect();
+    assert_eq!(lines.len(), 2, "expected one note line and the summary line: {}", built.err);
+    assert_eq!(
+        lines[0],
+        "note: pages with scripts/app.ts will use full page loads \
+         (add data-client-nav to opt in, or set [navigation] client = false)",
+        "the note names the unmarked script and both remedies"
+    );
+    assert!(
+        lines[1].starts_with(&format!(
+            "built 2 pages and 2 other files in {}, ",
+            root.join("dist").display()
+        )) && lines[1].ends_with(" ms"),
+        "a build ends with its summary line: {}",
+        lines[1]
+    );
+
+    let marked = [
+        (
+            "pages/index.html",
+            r#"<script type="module" src="../scripts/app.ts" data-client-nav></script><p>home</p>"#,
+        ),
+        ("pages/about.html", "<p>about</p>"),
+        ("scripts/app.ts", "console.log('hi');"),
+    ];
+    let clean = run(&["build", common::site("build-note-marked", &marked).to_str().unwrap()]);
+    assert!(clean.out.is_empty(), "{}", clean.out);
+    assert!(
+        !clean.err.contains("note:"),
+        "a site with no unmarked script does not print a note: {}",
+        clean.err
+    );
+    assert_eq!(clean.err.lines().count(), 1, "only the summary line prints: {}", clean.err);
 }

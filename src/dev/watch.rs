@@ -31,7 +31,7 @@ impl Saves {
 
     /// Waits for a save, then calls `build` until no save arrives while it runs, and returns
     /// that last build. It returns `None` once the watcher has stopped.
-    pub(super) fn rebuild<T>(&self, build: impl Fn() -> T) -> Option<T> {
+    pub(super) fn rebuild<T>(&self, mut build: impl FnMut() -> T) -> Option<T> {
         while !self.is_save(&self.events.recv().ok()?) {}
         loop {
             // One save arrives as several events, so the build waits until they stop.

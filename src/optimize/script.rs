@@ -131,7 +131,7 @@ pub(super) fn minify(code: &str, kind: Kind, mode: Mode) -> Result<String> {
     let scoping = checked.semantic.into_scoping();
     let with =
         scoping.scope_descendants_from_root().any(|scope| scoping.scope_flags(scope).is_with());
-    Ok(shrink(&allocator, parsed.program, Shrink { joined: false, mangle: !with }))
+    Ok(shrink(&allocator, parsed.program, Shrink { joined: kind == Kind::Module, mangle: !with }))
 }
 
 /// How far `shrink` goes.

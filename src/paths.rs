@@ -42,6 +42,24 @@ pub fn is_preview_image(name: &str) -> bool {
     ["og:image", "twitter:image"].iter().any(|image| name.eq_ignore_ascii_case(image))
 }
 
+/// Decodes HTML character references and `%XX` percent-encoding in a reference path.
+pub fn decode(raw: &str) -> String {
+    percent_decode(&html_escape::decode_html_entities(raw))
+}
+
+/// Returns the byte offset just past the doctype, or 0 if there is not one. Only ASCII
+/// whitespace and comments may precede a doctype without putting the browser in quirks mode.
+pub fn after_doctype(html: &str) -> usize {
+    let mut rest = html.trim_ascii_start();
+    while let Some((_, after)) = rest.strip_prefix("<!--").and_then(|s| s.split_once("-->")) {
+        rest = after.trim_ascii_start();
+    }
+    if !rest.get(..9).is_some_and(|start| start.eq_ignore_ascii_case("<!doctype")) {
+        return 0;
+    }
+    rest.find('>').map_or(0, |end| html.len() - rest.len() + end + 1)
+}
+
 /// A reference in its two parts.
 pub struct Reference<'a> {
     pub path: &'a str,

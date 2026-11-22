@@ -48,13 +48,16 @@ pub fn serve(root: &Path, mode: Mode, port: u16, network: bool) -> Result<()> {
     let saves = Saves::watch(&root)?;
     // The clock seeds the build number, so a page from before a restart sees a new one.
     let number = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
-    let first = Arc::new(build(&root, mode, number));
+    let mut shown = Vec::new();
+    let first = Arc::new(build(&root, mode, number, &mut shown));
     let dev = Arc::new(Dev { build: Mutex::new(first), swapped: Condvar::new() });
     let rebuilt = Arc::clone(&dev);
     thread::spawn(move || {
         // The number goes up by one for each build that is shown, failed ones included.
         for number in number + 1.. {
-            let Some(next) = saves.rebuild(|| build(&root, mode, number)) else { break };
+            let Some(next) = saves.rebuild(|| build(&root, mode, number, &mut shown)) else {
+                break;
+            };
             rebuilt.swap(next);
         }
     });
@@ -66,11 +69,19 @@ pub fn serve(root: &Path, mode: Mode, port: u16, network: bool) -> Result<()> {
 }
 
 /// Builds the site as the build `number`, and prints how it went.
-fn build(root: &Path, mode: Mode, number: u64) -> Build {
+fn build(root: &Path, mode: Mode, number: u64, shown: &mut Vec<String>) -> Build {
     let start = Instant::now();
     let site = crate::build(root, mode);
     match &site {
-        Ok(_) => eprintln!("built in {} ms", start.elapsed().as_millis()),
+        Ok(site) => {
+            eprintln!("built in {} ms", start.elapsed().as_millis());
+            if site.notes != *shown {
+                for note in &site.notes {
+                    eprintln!("note: {note}");
+                }
+                *shown = site.notes.clone();
+            }
+        }
         Err(e) => eprintln!("error: {e:#}"),
     }
     Build { number, site }

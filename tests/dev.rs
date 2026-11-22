@@ -5,10 +5,11 @@
 mod common;
 
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -21,6 +22,7 @@ const LOCAL: &str = "Host: localhost\r\n";
 struct Server {
     child: Child,
     port: u16,
+    lines: Receiver<String>,
 }
 
 impl Drop for Server {
@@ -51,9 +53,14 @@ fn serve(root: &Path, args: &[&str]) -> Server {
     let mut line = String::new();
     log.read_line(&mut line).unwrap();
     let port = line.trim().rsplit(':').next().unwrap().parse();
-    // The rest is read and dropped, so the server never waits on a full pipe.
-    thread::spawn(move || io::copy(&mut log, &mut io::sink()));
-    Server { child, port: port.unwrap_or_else(|_| panic!("no port in `{line}`")) }
+    let (tx, lines) = mpsc::channel();
+    // Drain stderr so the server never waits on a full pipe, forwarding lines to tests that read them.
+    thread::spawn(move || {
+        for line in log.lines().map_while(Result::ok) {
+            tx.send(line).map(drop).unwrap_or_default();
+        }
+    });
+    Server { child, port: port.unwrap_or_else(|_| panic!("no port in `{line}`")), lines }
 }
 
 impl Server {
@@ -133,6 +140,16 @@ fn serves_pages_and_assets_from_memory() {
     assert!(html.contains("<!-- A comment"), "a dev page is not minified: {html}");
     assert!(html.contains(r#"<script type="module" src="/_cinders/scripts/app.js">"#), "{html}");
     assert!(html.contains(r#"new EventSource("/_cinders/events")"#), "{html}");
+    let reload = r#"<script type="module" data-client-nav>const build=""#;
+    assert!(
+        html.contains(reload),
+        "the reload script is written for client-side navigation: {html}"
+    );
+    let navigation = r#"<head><script type="module" src="/assets/navigation.js"></script>"#;
+    assert!(html.contains(navigation), "{html}");
+    let navigation = server.get("/assets/navigation.js");
+    assert!(navigation.head.contains("Content-Type: text/javascript"), "{}", navigation.head);
+    assert!(navigation.text().starts_with("const DEV = true;"), "the script's dev form");
     assert_eq!(server.get("/?utm=1").body, home.body, "a query is ignored");
     assert_eq!(server.get("/index.html").body, home.body);
 
@@ -353,7 +370,10 @@ fn runs_the_slow_steps_only_when_optimized() {
 #[test]
 fn serves_a_site_under_the_path_of_its_address() {
     let files = [
-        ("cinders.toml", "[site]\nurl = \"https://example.com/base\"\n"),
+        (
+            "cinders.toml",
+            "[navigation]\nclient = false\n[site]\nurl = \"https://example.com/base\"\n",
+        ),
         (
             "pages/index.html",
             r#"<link rel="stylesheet" href="../site.css"><a href="/about/">About</a>"#,
@@ -412,4 +432,33 @@ fn a_port_in_use_is_an_error() {
     assert_eq!(second.status.code(), Some(1), "the second server stops");
     let error = String::from_utf8(second.stderr).unwrap();
     assert!(error.starts_with(&format!("error: cannot listen on port {port}: ")), "{error}");
+}
+
+#[test]
+fn dev_notes_scripts_missing_data_client_nav() {
+    let files = [
+        (
+            "pages/index.html",
+            r#"<script type="module" src="../scripts/app.ts"></script><p>home</p>"#,
+        ),
+        ("pages/about.html", "<p>about</p>"),
+        ("scripts/app.ts", "console.log('hi');"),
+    ];
+    let root = site("dev-unmarked-note", &files);
+    let server = serve(&root, &[]);
+    // Lines after `serving ...`: `built in ...`, then `note: ...`.
+    let mut output = Vec::new();
+    for _ in 0..2 {
+        let line = server
+            .lines
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or_else(|_| panic!("timed out waiting for dev server log: {output:?}"));
+        output.push(line);
+    }
+    let output = output.join("\n");
+    assert!(
+        output.contains("note: pages with scripts/app.ts will use full page loads"),
+        "{output}"
+    );
+    assert!(output.contains("data-client-nav"), "{output}");
 }

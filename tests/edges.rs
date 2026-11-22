@@ -57,7 +57,7 @@ fn encoded_and_unusual_file_names() {
 #[test]
 fn route_urls_are_percent_encoded() {
     let files = [
-        ("cinders.toml", "[site]\nurl = \"https://example.com\"\n"),
+        ("cinders.toml", "[navigation]\nclient = false\n[site]\nurl = \"https://example.com\"\n"),
         ("pages/index.html", r#"<a href="my%20post.html">a</a><a href="c%23.html">b</a>"#),
         ("pages/my post.html", r#"<a href="/c%23/">c</a><a href="/my post/">self</a>"#),
         ("pages/c#.html", r#"{page.url}<a href="/sitemap.xml">map</a>"#),
@@ -313,6 +313,7 @@ fn minifier_keeps_what_renders() {
 #[test]
 fn each_file_ships_once_under_its_fingerprint() {
     let files = [
+        ("cinders.toml", "[navigation]\nclient = false\n"),
         ("pages/index.html", r#"<img src="a.svg"><img src="a.svg?v=1"><img src="b/a.svg">"#),
         ("pages/about.html", r#"<img src="a.svg"><img src="c/a.svg"><a href="LICENSE">x</a>"#),
         ("pages/a.svg", SVG),
@@ -619,7 +620,7 @@ fn a_site_under_a_path_prefixes_every_rooted_reference() {
     assert!(css.starts_with("@import \"/base/extra.css\";"), "{css}");
     assert!(css.contains("url(/base/assets/mark-") && css.contains("url(/base/file.txt)"), "{css}");
     let docs = text(&built, "docs/a/index.html");
-    assert!(docs.starts_with("<a href=/base/>home</a><img src=/base/assets/mark-"), "{docs}");
+    assert!(docs.contains("</script><a href=/base/>home</a><img src=/base/assets/mark-"), "{docs}");
     let sitemap = text(&built, "sitemap.xml");
     assert!(sitemap.contains("<loc>https://example.com/base/docs/a/</loc>"), "{sitemap}");
     assert!(!built.files.contains_key("robots.txt"), "crawlers read it at the root of a host only");
@@ -732,4 +733,38 @@ fn errors_name_the_problem() {
     let fast = format!("{fast:#}");
     let expected = "both write _cinders/pages/a.js";
     assert!(fast.contains(expected), "either script may be named first: {fast}");
+}
+
+#[test]
+fn hoisted_blocks_follow_a_late_doctype_and_inline_blocks_escape_close_tags() {
+    let style = r#"<style>p { content: "<\/STYLE>" } b { content: "</style-sheet>" }</style>"#;
+    let script = r#"<script>console.log("<\/script>", "<\/script >", "<\/script/>");</script>"#;
+    let card = format!("{style}<p>hi</p>");
+    let page = format!("\n<!-- Note. -->\n<!doctype html><Card />{script}");
+    let files = [("components/Card.html", card.as_str()), ("pages/index.html", &page)];
+    let built = build(&site("e-doctype-escape", &files));
+    let html = text(&built, "index.html");
+    assert!(
+        html.starts_with("<!doctype html><style>"),
+        "hoisted blocks follow a doctype preceded by whitespace and comments: {html}"
+    );
+    assert!(
+        html.contains(r#"<style>p{content:"<\/STYLE>"}b{content:"</style-sheet>"}</style>"#),
+        "real close tags in inline <style> are escaped and longer tag names stay: {html}"
+    );
+    assert_eq!(
+        html.matches("</script>").count(),
+        1,
+        "</script inside minified inline <script> stays escaped: {html}"
+    );
+    assert!(html.contains(r"<\/script>"), "escaped close tag stays in script body: {html}");
+    assert!(html.contains(r"<\/script >"), "close tag with space is escaped: {html}");
+    assert!(html.contains(r"<\/script/>"), "close tag with slash is escaped: {html}");
+
+    // A fast build ships a script as written, so only the escape can change it.
+    let raw = "<script>console.log(String.raw`</script-editor>`); // </script</script>";
+    let fast =
+        text(&build_fast(&site("e-escape-fast", &[("pages/index.html", raw)])), "index.html");
+    let expected = r"<script>console.log(String.raw`</script-editor>`); // <\/script</script>";
+    assert_eq!(fast, expected, "a longer tag name stays, and a trailing </script is escaped");
 }

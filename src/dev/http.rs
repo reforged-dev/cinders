@@ -218,7 +218,7 @@ fn events(dev: &Dev, mut stream: &TcpStream) -> io::Result<()> {
 /// browsers allow six connections to an origin.
 fn reload(build: u64) -> String {
     format!(
-        r#"<script type="module">const build="{build}";let events;
+        r#"<script type="module" data-client-nav>const build="{build}";let events;
 const stop=()=>{{events?.close();events=null}};
 const start=()=>{{if(document.hidden)return stop();events??=new EventSource("{EVENTS}");events.onmessage=e=>e.data!=build&&location.reload()}};
 document.addEventListener("visibilitychange",start);addEventListener("pagehide",stop);addEventListener("pageshow",start);start()</script>"#

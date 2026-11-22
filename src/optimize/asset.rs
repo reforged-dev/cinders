@@ -129,7 +129,12 @@ impl<'a> Assets<'a> {
     pub(super) fn into_site(self) -> Site {
         let files = self.files.into_inner().unwrap_or_else(PoisonError::into_inner);
         let files = files.into_iter().map(|(path, output)| (path, output.content)).collect();
-        Site { files, prefix: self.config.prefix().to_string(), store: self.store }
+        Site {
+            files,
+            prefix: self.config.prefix().to_string(),
+            store: self.store,
+            notes: Vec::new(),
+        }
     }
 
     /// Encodes the image `file`, or reads the encode from the store. Returns `None` for an
@@ -202,6 +207,12 @@ impl<'a> Assets<'a> {
         Ok(url)
     }
 
+    /// Returns the content fingerprint of the output file at `path`, if one exists.
+    pub(super) fn fingerprint_at(&self, path: &str) -> Option<String> {
+        let files = super::lock(&self.files);
+        files.get(path)?.content.bytes().ok().map(|bytes| fingerprint(&bytes))
+    }
+
     /// Adds a file to the site. Two sources writing one path is an error.
     pub(super) fn put(&self, path: String, from: String, content: Content) -> Result<()> {
         let mut files = super::lock(&self.files);
@@ -220,7 +231,7 @@ impl<'a> Assets<'a> {
 }
 
 /// Eight URL-safe base64 characters of the content's BLAKE3 hash.
-fn fingerprint(bytes: &[u8]) -> String {
+pub(super) fn fingerprint(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let hash = blake3::hash(bytes);
     let mut out = String::with_capacity(8);

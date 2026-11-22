@@ -7,10 +7,11 @@ mod font;
 mod html;
 mod image;
 mod minify;
+mod navigation;
 mod reference;
 mod script;
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -37,6 +38,16 @@ struct Optimizer<'a> {
     targets: Targets,
     references: References<'a>,
     assets: Assets<'a>,
+    /// The `<script>` tag injected into every page when client-side navigation is enabled.
+    navigation: Option<String>,
+}
+
+/// Script information collected during `prepare`.
+struct Prepared {
+    /// Identifiers of all scripts in the site, used to fingerprint the navigation script.
+    scripts: BTreeSet<String>,
+    /// Executable scripts missing `data-client-nav`, for build notices.
+    unmarked: BTreeSet<String>,
 }
 
 /// Builds the site for the rendered pages of the site in the canonical directory `root`.
@@ -53,6 +64,7 @@ pub(crate) fn optimize(
         targets: css::targets(config)?,
         references: References::new(root, config),
         assets: Assets::new(root, config, mode),
+        navigation: None,
     };
     optimizer.add_public(&root.join("public"), "")?;
     for (path, text) in rendered.files {
@@ -67,10 +79,20 @@ pub(crate) fn optimize(
         optimizer.assets.put(page.path.clone(), from, Content::Bytes(Vec::new()))?;
     }
 
-    optimizer.prepare(&rendered.pages)?;
+    let prepared = optimizer.prepare(&rendered.pages)?;
+    // Client-side navigation only applies when there are at least two routes (excluding 404.html).
+    let routes = rendered.pages.iter().filter(|page| page.path != "404.html").count();
+    let mut notes = Vec::new();
+    if config.navigation.client && routes > 1 {
+        optimizer.navigation = Some(optimizer.add_navigation(&prepared.scripts)?);
+        if let Some(note) = navigation::unmarked_note(&prepared.unmarked) {
+            notes.push(note);
+        }
+    }
     let pages = rendered.pages.par_iter().map(|page| optimizer.page(page));
     let pages: Vec<String> = pages.collect::<Result<_>>()?;
     let mut site = optimizer.assets.into_site();
+    site.notes = notes;
     for (page, html) in rendered.pages.into_iter().zip(pages) {
         site.files.insert(page.path, Content::Bytes(html.into_bytes()));
     }
@@ -103,18 +125,19 @@ impl Optimizer<'_> {
         Ok(())
     }
 
-    /// Scans `pages` and builds what the scan finds: each module script as soon as a page
-    /// names it, then the characters that fonts are subset to, the stylesheets, and the
-    /// images. The pass that rewrites each page's references then finds every result ready.
-    fn prepare(&self, pages: &[Page]) -> Result<()> {
-        // A stylesheet's build waits on the thread pool, so each stylesheet and each module
-        // script runs on its own thread, where it cannot pick up a second one. A failure is
-        // kept, and the rewrite reports it with the page that asked.
-        thread::scope(|threads| {
-            let started = Mutex::new(HashSet::new());
-            let start = |file: PathBuf| {
-                if lock(&started).insert(file.clone()) {
-                    threads.spawn(move || self.asset(&file, Kind::Module));
+    /// Scans `pages` and builds referenced assets in parallel so `rewrite` finds them ready:
+    /// scripts as soon as they are discovered, then font characters, stylesheets, and images.
+    /// Returns the script identifiers used to fingerprint the navigation script across deploys
+    /// and any scripts missing `data-client-nav`.
+    fn prepare(&self, pages: &[Page]) -> Result<Prepared> {
+        // A stylesheet's build waits on the thread pool, so each stylesheet and each script
+        // runs on its own thread, where it cannot pick up a second one. A failure is kept,
+        // and the rewrite reports it with the page that asked.
+        let started = Mutex::new(HashSet::new());
+        let mut prepared = thread::scope(|threads| {
+            let start = |file: PathBuf, kind: Kind| {
+                if lock(&started).insert((file.clone(), kind)) {
+                    threads.spawn(move || self.asset(&file, kind));
                 }
             };
             let found = pages.par_iter().map(|page| html::scan(self, page, &start));
@@ -142,8 +165,15 @@ impl Optimizer<'_> {
             found.images.par_iter().for_each(|file| {
                 self.asset(file, Kind::Image).map(drop).unwrap_or_default();
             });
-            Ok(())
-        })
+            anyhow::Ok(Prepared { scripts: found.scripts, unmarked: found.unmarked })
+        })?;
+        for (file, kind) in started.into_inner().unwrap_or_else(PoisonError::into_inner) {
+            // The rewrite reports a script that failed to build.
+            if let Ok(script) = self.asset(&file, kind) {
+                prepared.scripts.insert(script.url);
+            }
+        }
+        Ok(prepared)
     }
 
     /// The HTML that `page` ships.

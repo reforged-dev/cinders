@@ -103,6 +103,9 @@ fn build(dir: &Path) -> Result<()> {
         Content::File(path) => path.metadata().map_or(0, |file| file.len()),
     });
     let count = |n: usize, what: &str| format!("{n} {what}{}", if n == 1 { "" } else { "s" });
+    for note in &site.notes {
+        eprintln!("note: {note}");
+    }
     eprintln!(
         "built {} and {} in {}, {} bytes in {} ms",
         count(pages, "page"),

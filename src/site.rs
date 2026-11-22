@@ -45,6 +45,9 @@ pub struct Site {
     pub prefix: String,
     /// The site's store, which knows the entries this build used.
     pub store: Store,
+    /// Build notices printed by `cinders build` and `cinders dev`, such as scripts missing
+    /// `data-client-nav`.
+    pub notes: Vec<String>,
 }
 
 impl Page {

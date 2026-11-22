@@ -149,10 +149,11 @@ pub(super) fn page(shared: &Shared, file: &Template, url: String) -> Result<Stri
     let mut html = String::new();
     renderer.nodes(&file.nodes, &env, Target::Html, &mut html)?;
     // Hoisted blocks end the `<head>`. Without one they follow the doctype, which stays first.
-    let at = html.find("</head>").unwrap_or_else(|| {
-        let doctype = html.get(..9).is_some_and(|start| start.eq_ignore_ascii_case("<!doctype"));
-        html.find('>').filter(|_| doctype).map_or(0, |end| end + 1)
-    });
+    let at = html
+        .as_bytes()
+        .windows(7)
+        .position(|window| window.eq_ignore_ascii_case(b"</head>"))
+        .unwrap_or_else(|| paths::after_doctype(&html));
     html.insert_str(at, &renderer.head.concat());
     Ok(html)
 }

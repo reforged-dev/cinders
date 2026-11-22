@@ -49,7 +49,8 @@ fn build_ships_pages_and_assets() {
     }
 
     let home = text(&site, "index.html");
-    assert!(home.starts_with("<!doctype html><html lang=en><meta charset=utf-8>"), "{home}");
+    let head = "<!doctype html><html lang=en><script type=module src=/assets/navigation-";
+    assert!(home.starts_with(head) && home.contains("</script><meta charset=utf-8>"), "{home}");
     assert!(!home.contains("<!--") && !home.contains("</body>"), "{home}");
     assert!(home.contains("<pre>  kept\n    as written  </pre>"), "{home}");
     assert!(home.contains("<a href=/about/>about</a>, or <a href=/search/>"), "{home}");
@@ -60,13 +61,13 @@ fn build_ships_pages_and_assets() {
     assert!(home.contains(".woff2 as=font type=font/woff2 crossorigin>"), "{home}");
 
     let notes = text(&site, "notes/index.html");
-    let head = "<!doctype html><html lang=en><meta charset=utf-8><title>Notes</title>\
+    let head = "</script><meta charset=utf-8><title>Notes</title>\
                 <link rel=stylesheet href=/assets/site-";
-    assert!(notes.starts_with(head), "{notes}");
+    assert!(notes.starts_with("<!doctype html><html lang=en><script") && notes.contains(head));
     let hoisted = ".css><style>.note{border-left:4px solid}</style>\
                    <script type=module src=/assets/app-";
     assert!(notes.contains(hoisted), "a component's style hoists once: {notes}");
-    assert_eq!(notes.matches("<script").count(), 1, "and so does its script: {notes}");
+    assert_eq!(notes.matches("/assets/app-").count(), 1, "and so does its script: {notes}");
     let mark = "<aside class=\"note note-tip\"><img src=/assets/mark-y0yc32kQ.svg alt>";
     assert!(notes.contains(mark), "a component's paths resolve from its file: {notes}");
     assert_eq!(notes.matches("<img src=/assets/mark-y0yc32kQ.svg alt>").count(), 2, "{notes}");
@@ -107,11 +108,12 @@ fn build_bundles_scripts_and_styles() {
     assert_eq!(assets(&site, "woff2").len(), 1);
 
     let scripts = assets(&site, "js");
-    assert_eq!(scripts.len(), 2, "one file per script, shared by the pages: {scripts:?}");
+    assert_eq!(scripts.len(), 3, "one file per script, shared by the pages: {scripts:?}");
+    assert!(scripts[1].starts_with("assets/navigation-"), "and the navigation script");
     let app = text(&site, scripts[0]);
     assert!(app.contains("toUpperCase") && app.contains("Hello, "), "imports are joined: {app}");
     assert!(!app.contains("tree shaking") && !app.contains("HTMLElement"), "{app}");
-    let status = text(&site, scripts[1]);
+    let status = text(&site, scripts[2]);
     assert!(
         status.contains("var statusText=") && status.contains("function showStatus"),
         "{status}"
@@ -121,7 +123,9 @@ fn build_bundles_scripts_and_styles() {
 #[test]
 fn fast_build_skips_the_slow_steps() {
     let site = build_fast(&fixture());
-    assert!(!site.files.keys().any(|path| path.starts_with("assets/")));
+    let fingerprinted: Vec<_> =
+        site.files.keys().filter(|path| path.starts_with("assets/")).collect();
+    assert_eq!(fingerprinted, ["assets/navigation.js"], "only the navigation script is there");
     let home = text(&site, "index.html");
     assert!(home.contains("<!-- A comment"), "pages are not minified: {home}");
     assert!(home.contains(r#"<img src="/_cinders/images/shot.png" alt="A terminal">"#), "{home}");

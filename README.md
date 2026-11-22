@@ -34,6 +34,9 @@ These features are built in:
   imports, lowers syntax for the browsers you support, and minifies the result.
 - **TypeScript and JavaScript bundling and minifying.** Cinders joins each module with the
   modules it imports into one file, strips the types, and minifies the result.
+- **Client-side navigation.** Clicking a link to another page of your site updates the
+  page in place instead of reloading it. Shared layouts, images, and UI state stay
+  intact.
 - **Content hashing.** Each stylesheet, script, image, and font is named by its content,
   so browsers can cache it for a year. Repeat visits load faster and use less bandwidth.
 - **`sitemap.xml` and `robots.txt`.** Set your site's address in `cinders.toml`, and
@@ -108,6 +111,10 @@ unchecked = ["/api/"]
 [site]
 url = "https://example.com"
 
+[navigation]
+client = true
+prefetch = "hover"
+
 [fonts]
 scan = ["data/quotes.json"]
 
@@ -116,15 +123,27 @@ avif = 59
 max_width = 2560
 ```
 
-| Key                  | Meaning                                                                                                                                                                                                                                       |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `[site]`             | Values that templates read as `site`. Add any key you need.                                                                                                                                                                                   |
-| `[site] url`         | The site's address. Cinders needs it to write `sitemap.xml`, `robots.txt`, and the full URLs of link preview images. If the address has a path, such as `/docs`, cinders writes that path before every path in the site that starts with `/`. |
-| `browsers`           | The oldest browsers you support. Cinders lowers stylesheet syntax for them.                                                                                                                                                                   |
-| `unchecked`          | Path prefixes, such as `/api/`. Cinders does not check a reference under one of them.                                                                                                                                                         |
-| `[fonts] scan`       | Files with text that a script adds to a page. Cinders keeps their characters in each font.                                                                                                                                                    |
-| `[images] avif`      | The AVIF quality, a whole number from 0 to 100.                                                                                                                                                                                               |
-| `[images] max_width` | The widest an encoded image can be, in pixels. Cinders scales a wider image down.                                                                                                                                                             |
+| Key                     | Meaning                                                                                                                                                                                                                                                                                                 |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[site]`                | Values that templates read as `site`. Add any key you need.                                                                                                                                                                                                                                             |
+| `[site] url`            | The site's address. Cinders needs it to write `sitemap.xml`, `robots.txt`, and the full URLs of link preview images. If the address has a path, such as `/docs`, cinders writes that path before every path in the site that starts with `/`.                                                           |
+| `browsers`              | The oldest browsers you support. Cinders lowers stylesheet syntax for them.                                                                                                                                                                                                                             |
+| `unchecked`             | Path prefixes, such as `/api/`. Cinders does not check a reference under one of them.                                                                                                                                                                                                                   |
+| `[navigation] client`   | Whether links between pages update the current document in place instead of doing a full page reload. With `true`, cinders adds a small script that fetches the next page and patches only the changed HTML. With `false`, cinders does not add the script and every click triggers a normal page load. |
+| `[navigation] prefetch` | When client-side navigation fetches the next page ahead of a click. With `"hover"`, it prefetches when a visitor hovers a link. With `"visible"`, it prefetches when a link scrolls into view.                                                                                                          |
+| `[fonts] scan`          | Files with text that a script adds to a page. Cinders keeps their characters in each font.                                                                                                                                                                                                              |
+| `[images] avif`         | The AVIF quality, a whole number from 0 to 100.                                                                                                                                                                                                                                                         |
+| `[images] max_width`    | The widest an encoded image can be, in pixels. Cinders scales a wider image down.                                                                                                                                                                                                                       |
+
+### Client-side navigation
+
+`data-client-nav` marks a script as written for client-side navigation. A marked script
+runs once per document, not once per page view, so its state and listeners carry across
+navigations.
+
+```html
+<script type="module" src="../scripts/menu.ts" data-client-nav></script>
+```
 
 ## Development
 

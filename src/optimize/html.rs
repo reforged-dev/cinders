@@ -35,6 +35,11 @@ pub(super) struct Found {
     pub(super) styles: BTreeSet<PathBuf>,
     /// The images to encode before the rewrite.
     pub(super) images: BTreeSet<PathBuf>,
+    /// Inline script bodies and non-bundled script `src` values (external URLs or files in
+    /// `public/`), collected to fingerprint the site's scripts.
+    pub(super) scripts: BTreeSet<String>,
+    /// Executable scripts that do not carry `data-client-nav`, described for build notices.
+    pub(super) unmarked: BTreeSet<String>,
 }
 
 impl Found {
@@ -42,42 +47,86 @@ impl Found {
         self.chars.extend(other.chars);
         self.styles.extend(other.styles);
         self.images.extend(other.images);
+        self.scripts.extend(other.scripts);
+        self.unmarked.extend(other.unmarked);
         self
     }
 }
 
-/// Collects what `page` draws and builds, and passes each module script to `start`. A
-/// reference that fails to resolve is skipped here and reported by the rewrite.
-pub(super) fn scan(optimizer: &Optimizer, page: &Page, start: &dyn Fn(PathBuf)) -> Found {
+/// Collects the characters, stylesheets, images, and scripts `page` uses, and starts building
+/// each local script file through `start`. Unresolved references are skipped here and reported
+/// during `rewrite`.
+pub(super) fn scan(optimizer: &Optimizer, page: &Page, start: &dyn Fn(PathBuf, Kind)) -> Found {
     let dir = page.source.parent().unwrap_or(Path::new(""));
     let depth = Rc::new(Cell::new(0));
     let found = RefCell::new(Found::default());
     let style = RefCell::new(String::new());
+    let code = RefCell::new(String::new());
+    let inline = Cell::new(Kind::Raw);
     let mut settings = RewriteStrSettings::new()
         .append_element_content_handler(picture_depth(Rc::clone(&depth)))
         .append_element_content_handler(element!("img[src], script[src], link[href]", |element| {
             let attr = if element.tag_name() == "link" { "href" } else { "src" };
             let kind = kind(optimizer, element, attr, depth.get());
+            if matches!(kind, Kind::Raw | Kind::Font) {
+                return Ok(());
+            }
             let value = element.get_attribute(attr).unwrap_or_default();
-            if matches!(kind, Kind::Css | Kind::Module | Kind::Image)
-                && let Ok(Target::File(file, _)) = optimizer.references.resolve(dir, &value)
+            let mut found = found.borrow_mut();
+            match (kind, optimizer.references.resolve(dir, &value)) {
+                (Kind::Css, Ok(Target::File(file, _))) => drop(found.styles.insert(file)),
+                (Kind::Image, Ok(Target::File(file, _))) => drop(found.images.insert(file)),
+                (Kind::Module | Kind::Classic, Ok(Target::File(file, _))) => start(file, kind),
+                (Kind::Module | Kind::Classic, Ok(_)) if !value.trim().is_empty() => {
+                    found.scripts.insert(value);
+                }
+                _ => {}
+            }
+            Ok(())
+        }))
+        .append_element_content_handler(element!("script", |element| {
+            let kind = element.get_attribute("type").unwrap_or_default().to_ascii_lowercase();
+            let script = script_kind(&kind);
+            let src = element.get_attribute("src");
+            inline.set(if src.is_some() { Kind::Raw } else { script });
+            if script != Kind::Raw
+                && !element.has_attribute("data-client-nav")
+                && !element.has_attribute("nomodule")
             {
-                let mut found = found.borrow_mut();
-                match kind {
-                    Kind::Module => start(file),
-                    Kind::Css => drop(found.styles.insert(file)),
-                    _ => drop(found.images.insert(file)),
+                let label = match src {
+                    Some(src) if src.trim().is_empty() => None,
+                    Some(src) => Some(match optimizer.references.resolve(dir, &src) {
+                        Ok(Target::File(file, _)) => paths::name(optimizer.root, &file),
+                        _ => src,
+                    }),
+                    None => Some(format!(
+                        "inline script in {}",
+                        paths::name(optimizer.root, &page.source)
+                    )),
+                };
+                if let Some(label) = label {
+                    found.borrow_mut().unmarked.insert(label);
                 }
             }
             Ok(())
         }));
-    // Only an optimized build subsets fonts, so only it needs the characters.
+    // Only an optimized build subsets fonts and fingerprints the site's scripts, so only it
+    // needs the drawn characters and inline script bodies.
     if optimizer.mode == Mode::Optimized {
         settings = settings
             .append_element_content_handler(text!("style", |text| {
                 style.borrow_mut().push_str(text.as_str());
                 if text.last_in_text_node() {
                     found.borrow_mut().chars.extend(css::strings(&style.take()).chars());
+                }
+                Ok(())
+            }))
+            .append_element_content_handler(text!("script", |text| {
+                if inline.get() != Kind::Raw {
+                    code.borrow_mut().push_str(text.as_str());
+                    if text.last_in_text_node() {
+                        found.borrow_mut().scripts.insert(code.take());
+                    }
                 }
                 Ok(())
             }))
@@ -109,8 +158,18 @@ pub(super) fn rewrite(optimizer: &Optimizer, page: &Page) -> Result<String> {
     let code = RefCell::new(String::new());
     // How the current `<script>` is built, or `Kind::Raw` if it is not inline JavaScript.
     let inline = Cell::new(Kind::Raw);
+    // The navigation `<script>` tag, consumed by the first `<head>` or inserted after the
+    // doctype.
+    let navigation = Cell::new(optimizer.navigation.as_deref());
     let settings = RewriteStrSettings::new()
         .append_element_content_handler(picture_depth(Rc::clone(&depth)))
+        .append_element_content_handler(element!("head", |element| {
+            // Prepend so the navigation script runs before any other module script.
+            if let Some(tag) = navigation.take() {
+                element.prepend(tag, ContentType::Html);
+            }
+            Ok(())
+        }))
         .append_element_content_handler(element!(
             r"[src], [href], [poster], [data], [xlink\:href], [srcset], [style]",
             |element| boxed(references(optimizer, dir, element, depth.get()))
@@ -119,8 +178,7 @@ pub(super) fn rewrite(optimizer: &Optimizer, page: &Page) -> Result<String> {
             boxed(preview_image(optimizer, dir, element))
         }))
         .append_element_content_handler(element!("script", |element| {
-            let kind = element.get_attribute("type").unwrap_or_default().to_ascii_lowercase();
-            inline.set(if element.has_attribute("src") { Kind::Raw } else { script_kind(&kind) });
+            inline.set(inline_kind(element));
             Ok(())
         }))
         .append_element_content_handler(text!("style", |text| {
@@ -131,7 +189,7 @@ pub(super) fn rewrite(optimizer: &Optimizer, page: &Page) -> Result<String> {
             }
             let css = css::inline(optimizer, &style.take(), &page.source).context("<style>");
             // A `</style` inside a CSS string would end the element early.
-            text.replace(&boxed(css)?.replace("</style", "<\\/style"), ContentType::Html);
+            text.replace(&escape_close_tag(&boxed(css)?, "style"), ContentType::Html);
             Ok(())
         }))
         .append_element_content_handler(text!("script", |text| {
@@ -144,10 +202,47 @@ pub(super) fn rewrite(optimizer: &Optimizer, page: &Page) -> Result<String> {
                 return Ok(());
             }
             let js = script::minify(&code.take(), inline.get(), optimizer.mode).context("<script>");
-            text.replace(&boxed(js)?, ContentType::Html);
+            // A `</script` inside a JS string or comment would end the element early.
+            text.replace(&escape_close_tag(&boxed(js)?, "script"), ContentType::Html);
             Ok(())
         }));
-    lol_html::rewrite_str(&page.html, settings).map_err(|e| anyhow!("{e}"))
+    let mut html = lol_html::rewrite_str(&page.html, settings).map_err(|e| anyhow!("{e}"))?;
+    // If the page does not have a `<head>` tag, insert the tag after the doctype (or at the
+    // start).
+    if let Some(tag) = navigation.take() {
+        html.insert_str(paths::after_doctype(&html), tag);
+    }
+    Ok(html)
+}
+
+/// Keeps an inline `<style>` or `<script>` body from ending its element early by escaping
+/// `</tag` as `<\/tag`. Matches only real close tags, not longer names such as `</script-editor>`.
+fn escape_close_tag<'a>(text: &'a str, tag: &str) -> Cow<'a, str> {
+    let bytes = text.as_bytes();
+    let needle = tag.as_bytes();
+    let len = needle.len() + 2;
+    let is_end = |&b: &u8| b.is_ascii_whitespace() || matches!(b, b'/' | b'>');
+    let mut out = String::new();
+    let mut from = 0;
+    let mut i = 0;
+    while i + len <= bytes.len() {
+        if &bytes[i..i + 2] == b"</"
+            && bytes[i + 2..i + len].eq_ignore_ascii_case(needle)
+            && bytes.get(i + len).is_none_or(is_end)
+        {
+            out.push_str(&text[from..i]);
+            out.push_str("<\\/");
+            from = i + 2;
+            i += len;
+        } else {
+            i += 1;
+        }
+    }
+    if out.is_empty() {
+        return Cow::Borrowed(text);
+    }
+    out.push_str(&text[from..]);
+    Cow::Owned(out)
 }
 
 /// How the file that `attr` of `element` names is processed. `depth` counts the `<picture>`
@@ -172,12 +267,27 @@ fn kind(optimizer: &Optimizer, element: &Element, attr: &str, depth: u32) -> Kin
     }
 }
 
+/// Returns how an inline `<script>` element should be processed, or `Kind::Raw` if it has a
+/// `src` attribute or is not JavaScript.
+fn inline_kind(element: &Element) -> Kind {
+    let kind = element.get_attribute("type").unwrap_or_default().to_ascii_lowercase();
+    if element.has_attribute("src") { Kind::Raw } else { script_kind(&kind) }
+}
+
 /// How a `<script>` of the type `kind` is built. One that is not JavaScript, such as JSON,
 /// stays as written.
 fn script_kind(kind: &str) -> Kind {
-    match kind {
+    match kind.trim() {
         "module" => Kind::Module,
-        "" | "text/javascript" => Kind::Classic,
+        ""
+        | "text/javascript"
+        | "application/javascript"
+        | "text/ecmascript"
+        | "application/ecmascript"
+        | "text/x-javascript"
+        | "application/x-javascript"
+        | "text/x-ecmascript"
+        | "application/x-ecmascript" => Kind::Classic,
         _ => Kind::Raw,
     }
 }

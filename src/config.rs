@@ -18,8 +18,36 @@ pub struct Config {
     /// Rooted URL prefixes that exist only after the build, so references under them are not
     /// checked.
     pub unchecked: Vec<String>,
+    pub navigation: Navigation,
     pub fonts: Fonts,
     pub images: Images,
+}
+
+/// Client-side navigation and prefetch settings.
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Navigation {
+    /// Whether to inject the client-side navigation script so links between pages update the
+    /// document in place instead of triggering a full page reload.
+    pub client: bool,
+    pub prefetch: Prefetch,
+}
+
+impl Default for Navigation {
+    fn default() -> Self {
+        Navigation { client: true, prefetch: Prefetch::default() }
+    }
+}
+
+/// When client-side navigation prefetches a linked page before it is clicked.
+#[derive(Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Prefetch {
+    /// When a visitor hovers, focuses, or touches the link.
+    #[default]
+    Hover,
+    /// When the link enters the viewport, in addition to hover, focus, and touch.
+    Visible,
 }
 
 #[derive(Deserialize, Default)]

@@ -62,7 +62,7 @@ impl<'a> References<'a> {
         }
         // A reference may write a space or a non-ASCII name percent-encoded, and HTML may use
         // character references.
-        let path = paths::percent_decode(&html_escape::decode_html_entities(raw));
+        let path = paths::decode(raw);
         if path.starts_with('/') {
             let unchecked = || self.config.unchecked.iter().any(|prefix| path.starts_with(prefix));
             if !self.urls.contains(&path) && !unchecked() {

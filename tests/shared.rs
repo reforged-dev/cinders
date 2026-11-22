@@ -11,7 +11,7 @@ use std::sync::Barrier;
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use cinders::config::Config;
+use cinders::config::{Config, Prefetch};
 use cinders::store::{self, Store};
 use cinders::{Content, Site, paths};
 
@@ -35,7 +35,12 @@ fn names(dir: &Path) -> Vec<String> {
 /// A built site of `files`, each an output path and its content, with its store in `root`.
 fn built(root: &Path, files: Vec<(&str, Content)>) -> Site {
     let files = files.into_iter().map(|(path, content)| (path.to_string(), content));
-    Site { files: files.collect(), prefix: String::new(), store: Store::new(root) }
+    Site {
+        files: files.collect(),
+        prefix: String::new(),
+        store: Store::new(root),
+        notes: Vec::new(),
+    }
 }
 
 #[test]
@@ -45,15 +50,24 @@ fn config_rejects_what_it_does_not_know() {
     let defaults = load("c-none", "").unwrap();
     assert_eq!(defaults.images.avif, 59, "the default quality");
     assert_eq!(defaults.images.max_width, 2560, "the default width limit");
+    assert!(defaults.navigation.client, "client-side navigation is the default");
+    assert_eq!(defaults.navigation.prefetch, Prefetch::Hover, "hover is the default");
     assert_eq!(load("c-one", "[images]\navif = 50\n").unwrap().images.max_width, 2560);
     let all = load(
         "c-all",
-        "browsers = [\"chrome 120\", \"safari 17.2.1\"]\nunchecked = [\"/x/\"]\n[site]\nurl = \"https://x.example\"\nnav = [\"a\"]\n[fonts]\nscan = [\"a.ts\"]\n[images]\navif = 1\nmax_width = 1600\n",
+        "browsers = [\"chrome 120\", \"safari 17.2.1\"]\nunchecked = [\"/x/\"]\n[site]\nurl = \"https://x.example\"\nnav = [\"a\"]\n[navigation]\nclient = false\nprefetch = \"visible\"\n[fonts]\nscan = [\"a.ts\"]\n[images]\navif = 1\nmax_width = 1600\n",
     );
     let all = all.unwrap();
     assert_eq!(all.browsers.unwrap(), ["chrome 120", "safari 17.2.1"]);
     assert_eq!(all.unchecked, ["/x/"]);
+    assert!(!all.navigation.client, "client-side navigation can be disabled");
+    assert_eq!(all.navigation.prefetch, Prefetch::Visible);
     assert!(all.site.contains_key("nav"), "[site] keeps the keys an author adds");
+    let own = load("c-own", "[site]\nnavigation = \"full\"\nprefetch = \"visible\"\n").unwrap();
+    assert!(own.site.contains_key("navigation"), "a key of that name is the author's");
+    assert!(own.navigation.client, "and does not change [navigation] settings");
+    let one = load("c-one-key", "[navigation]\nprefetch = \"visible\"\n").unwrap();
+    assert!(one.navigation.client, "a table with one key keeps the other's default");
     assert_eq!(all.fonts.scan, ["a.ts"]);
     assert_eq!(all.images.avif, 1);
     assert_eq!(all.images.max_width, 1600);
@@ -67,6 +81,11 @@ fn config_rejects_what_it_does_not_know() {
         ("c-range", "[images]\navif = 101\n", "from 0 to 100"),
         ("c-width", "[images]\nmax_width = 0\n", "max_width is at least 1"),
         ("c-prefix", "unchecked = [\"x\"]\n", "starts with `/`"),
+        ("c-navigation", "[navigation]\nclient = \"full\"\n", "expected a boolean"),
+        ("c-navigation-key", "[navigation]\nmode = \"client\"\n", "unknown field `mode`"),
+        ("c-navigation-string", "navigation = \"full\"\n", "cinders.toml"),
+        ("c-prefetch", "[navigation]\nprefetch = \"eager\"\n", "expected `hover` or `visible`"),
+        ("c-prefetch-top", "prefetch = \"visible\"\n", "unknown field `prefetch`"),
         ("c-query", "browsers = \"last 2 versions\"\n", "expected a sequence"),
         ("c-syntax", "[site\n", "cinders.toml"),
     ] {
