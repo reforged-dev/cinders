@@ -4,7 +4,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/reforged-dev/cinders/main/install.sh | sh
 #
-# Set CINDERS_VERSION to install a specific release, for example 0.1.0. The default is the
+# Set CINDERS_VERSION to install a specific release, for example 0.2.0. The default is the
 # latest release.
 # Set CINDERS_BASE_URL to download from a mirror instead of GitHub.
 set -eu

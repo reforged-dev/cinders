@@ -57,7 +57,7 @@ Linux x86_64, and Linux aarch64.
 To install a specific version, set `CINDERS_VERSION` for the shell that runs the script:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/reforged-dev/cinders/main/install.sh | CINDERS_VERSION=0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/reforged-dev/cinders/main/install.sh | CINDERS_VERSION=0.2.0 sh
 ```
 
 ## A first site
